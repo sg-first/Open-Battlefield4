@@ -133,7 +133,8 @@ async function boot() {
   window.__game = {
     scene, camera, renderer, player, weapons, enemies, civilians, boxes, worldInfo, stats,
     builder, tex, state, hud, post,
-    setClock: (h) => { state.clock = h; },
+    setClock: (h) => jumpToTime(h),
+    toggleTimePanel,
     inspect: () => inspectForward(false),
     lastInspect: () => lastInspect,
     render: () => {
@@ -150,6 +151,7 @@ async function boot() {
 /* ---------------------------------------------------------- 输入 */
 const keys = Object.create(null);
 const input = { forward: 0, right: 0, jump: false, sprint: false, crouch: false, ads: false, adsZoom: 1 };
+const shiftHeld = () => !!(keys['ShiftLeft'] || keys['ShiftRight']);
 let mouseDown = false, rmbDown = false;
 
 onkeydown = (e) => {
@@ -167,7 +169,9 @@ onkeydown = (e) => {
     case 'KeyE': weapons.next(1); break;
     case 'KeyM': state.showMap = !state.showMap; $('miniWrap').style.display = state.showMap ? '' : 'none'; break;
     case 'KeyH': document.body.classList.toggle('hidePanels'); break;
-    case 'KeyT': state.timeFlow = state.timeFlow > 0.05 ? 0.02 : 0.6; break;
+    case 'KeyK': toggleTimePanel(); break;
+    case 'Minus': case 'NumpadSubtract': jumpToTime(state.clock - (shiftHeld() ? 1 / 6 : 1)); break;
+    case 'Equal': case 'NumpadAdd': jumpToTime(state.clock + (shiftHeld() ? 1 / 6 : 1)); break;
     case 'KeyO': toggleTuner(); break;
     case 'KeyP': if (tunerOn) printTuning(); break;
     case 'BracketLeft': if (tunerOn) tuneStep(-1); break;
@@ -216,7 +220,7 @@ renderer.domElement.addEventListener('click', () => {
 });
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === renderer.domElement;
-  $('pauseHint').classList.toggle('on', started && !locked);
+  $('pauseHint').classList.toggle('on', started && !locked && !timePanelOpen);
   if (started) state.paused = !locked;
 });
 
@@ -266,6 +270,57 @@ function inspectForward(copy) {
     实例总数: info.instances,
   });
   return info;
+}
+
+/* ---------------------------------------------------------- 时间跳转 */
+const timeBox = $('timeBox'), timeRange = $('timeRange'), timeVal = $('timeVal');
+let timePanelOpen = false;
+
+const fmtClock = (t) => {
+  const h = Math.floor(t) % 24, m = Math.floor((t % 1) * 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+};
+
+/** 直接跳到某个时刻（小时，0..24），并立刻刷新天空/光照/雾 */
+function jumpToTime(h, quiet) {
+  const v = ((+h % 24) + 24) % 24;
+  if (!Number.isFinite(v)) return;
+  state.clock = v;
+  if (worldInfo) updateSky(0);
+  if (timePanelOpen) syncTimePanel();
+  if (!quiet && hud) hud.toast('时间 → ' + fmtClock(v), '按 K 打开时间面板可跳到任意时刻');
+}
+
+function syncTimePanel() {
+  if (timeRange) timeRange.value = String(Math.round(state.clock * 4) / 4);   // 对齐 15 分钟步进
+  if (timeVal) timeVal.textContent = fmtClock(state.clock);
+}
+
+function requestLock() {
+  if (!started) return;
+  try {
+    const r = renderer.domElement.requestPointerLock();
+    if (r && r.catch) r.catch(() => {});
+  } catch (e) { /* 冷却期内会被拒绝，点击画面即可重新锁定 */ }
+}
+
+function toggleTimePanel(on) {
+  timePanelOpen = on === undefined ? !timePanelOpen : !!on;
+  if (!timeBox) return;
+  timeBox.classList.toggle('on', timePanelOpen);
+  if (timePanelOpen) {
+    syncTimePanel();
+    if (document.pointerLockElement) document.exitPointerLock();   // 让出鼠标以便拖动滑块
+  } else {
+    requestLock();
+  }
+}
+
+if (timeRange) {
+  timeRange.addEventListener('input', () => jumpToTime(parseFloat(timeRange.value), true));
+}
+for (const b of document.querySelectorAll('#timeBox button[data-t]')) {
+  b.addEventListener('click', () => jumpToTime(parseFloat(b.dataset.t), true));
 }
 
 /* ---------------------------------------------------------- 手持模型调参 */
@@ -325,7 +380,7 @@ function printTuning() {
 /* ---------------------------------------------------------- 天空与光照 */
 const _sunDir = new THREE.Vector3();
 function updateSky(dt) {
-  state.clock = (state.clock + dt * state.timeFlow) % 24;
+  if (!timePanelOpen) state.clock = (state.clock + dt * state.timeFlow) % 24;   // 调整时间面板打开时定格
   const dir = sunDirAt(state.clock);
   _sunDir.copy(dir);
   const st = skyStateAt(dir.y);

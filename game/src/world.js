@@ -575,8 +575,6 @@ export function buildWorld(o) {
       W.place('objects_props_chineselantern_01_chineselantern_01_mesh',
         plaza.x + Math.cos(a + 0.3) * 20, 3.4, plaza.z + Math.sin(a + 0.3) * 20, 0, { collide: false });
     }
-    W.place('levels_mp_mp_siege_placeholders_chinesesign_03_mesh', plaza.x - 18, 5.4, plaza.z + 41, Math.PI, { collide: false });
-    W.place('levels_mp_mp_siege_placeholders_chinesesign_03_mesh', plaza.x + 20, 5.4, plaza.z + 41, 0, { collide: false });
     // 广场上的坦克与直升机残骸（放在街区边缘）
     W.place('gameplay_vehicles_ch_mbt_type99_spec_ch_mbt_type99_sp_shanghaichase_mesh', plaza.x + 33, 0, plaza.z - 30, 0.7, { collide: true });
     W.place('gameplay_vehicles_ch_lthe_z-9_ch_lthe_z-9_wreck_mesh', plaza.x - 34, 0, plaza.z - 28, 2.1, { collide: true });

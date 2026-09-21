@@ -170,6 +170,19 @@
     text-shadow:0 3px 18px rgba(0,0,0,.9)}
   #hudBannerS{font-size:12px;color:#c9d8e6;letter-spacing:2px;margin-top:4px}
 
+  /* ---------- 时间跳转 ---------- */
+  #timeBox{left:50%;top:50%;transform:translate(-50%,-50%);display:none;z-index:22;
+    min-width:320px;text-align:center;pointer-events:auto}
+  #timeBox.on{display:block}
+  #timeBox .row{display:flex;align-items:center;gap:7px;justify-content:center;margin-top:9px}
+  #timeVal{font-size:20px;font-weight:800;color:#ffe6b8;font-variant-numeric:tabular-nums;
+    min-width:66px;text-shadow:0 2px 8px rgba(0,0,0,.8)}
+  #timeRange{width:100%;margin-top:8px;accent-color:#7fd1ff;cursor:pointer}
+  #timeBox button{font:inherit;font-size:11px;color:#cfe6ff;cursor:pointer;
+    background:rgba(160,200,240,.10);border:1px solid rgba(160,200,240,.32);
+    border-radius:5px;padding:2px 9px}
+  #timeBox button:hover{background:rgba(160,200,240,.24)}
+
   /* ---------- 载入 ---------- */
   #loading{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 40%,#12202e,#05070a 70%);
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
@@ -262,7 +275,7 @@
   <div class="r"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移动　<kbd>Shift</kbd> 疾跑　<kbd>Ctrl</kbd> 蹲</div>
   <div class="r"><kbd>空格</kbd> 跳跃　<kbd>鼠标左键</kbd> 射击　<kbd>右键</kbd> 开镜</div>
   <div class="r"><kbd>R</kbd> 换弹　<kbd>1</kbd><kbd>2</kbd> / <kbd>滚轮</kbd> 换枪</div>
-  <div class="r"><kbd>M</kbd> 地图　<kbd>T</kbd> 时间加速　<kbd>H</kbd> 隐藏面板</div>
+  <div class="r"><kbd>M</kbd> 地图　<kbd>K</kbd> 时间跳转　<kbd>H</kbd> 隐藏面板</div>
   <div class="r"><kbd>F</kbd> 补给并重生　<kbd>O</kbd> 武器手感调参</div>
   <div class="r"><kbd>I</kbd> 识别前方资产　<kbd>Shift</kbd>+<kbd>I</kbd> 并复制资产名</div>
   <div class="r"><kbd>Esc</kbd> 释放鼠标</div>
@@ -289,6 +302,20 @@
 <div id="pauseHint">
   <h2>已 暂 停</h2>
   <div class="s">点击画面继续（锁定鼠标）</div>
+</div>
+
+<!-- 时间跳转 -->
+<div id="timeBox" class="panel">
+  <div class="t">时 间 跳 转</div>
+  <input id="timeRange" type="range" min="0" max="24" step="0.25">
+  <div class="row">
+    <span id="timeVal">--:--</span>
+    <button data-t="5.5">黎明</button>
+    <button data-t="12">正午</button>
+    <button data-t="18.5">黄昏</button>
+    <button data-t="23">深夜</button>
+  </div>
+  <div style="margin-top:7px;color:#7d93a8;font-size:11px">拖动滑块跳转任意时刻　<kbd>-</kbd><kbd>=</kbd> ±1 小时　<kbd>K</kbd> 关闭</div>
 </div>
 
 <!-- 武器调参 -->
