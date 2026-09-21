@@ -14,6 +14,7 @@ import { CharacterFactory } from './characters.js';
 import { EnemyManager } from './enemies.js';
 import { buildWorld, Civilians, skyStateAt, sunDirAt, CITY } from './world.js';
 import { PostFX } from './post.js';
+import { Inspector } from './inspect.js';
 import { clamp, smoothstep, yieldFrame } from './util.js';
 
 const $ = (id) => document.getElementById(id);
@@ -56,6 +57,8 @@ const state = {
 };
 
 let audio, hud, player, weapons, enemies, civilians, fx, boxes, worldInfo, post, glowMats = [], bgMats = [];
+let inspector = null, lastInspect = null;
+let builder = null;
 
 async function boot() {
   const tex = new TexCache(Math.min(8, renderer.capabilities.getMaxAnisotropy()));
@@ -70,7 +73,7 @@ async function boot() {
   await yieldFrame();
 
   boxes = new BoxWorld();
-  const builder = new WorldBuilder(scene, assets, boxes);
+  builder = new WorldBuilder(scene, assets, boxes);
   worldInfo = buildWorld({ scene, assets, builder, renderer });
   const stats = builder.build();
   boxes.finalize();
@@ -112,6 +115,8 @@ async function boot() {
   civilians = new Civilians({ scene, boxes, factory, audio });
   civilians.spawn(26, worldInfo.npcSpawns);
 
+  inspector = new Inspector({ camera, targets: builder.objects, maxDist: 700 });
+
   hud.setObjective('目标：清理街区的敌军');
   hud.setScore(0);
 
@@ -129,6 +134,8 @@ async function boot() {
     scene, camera, renderer, player, weapons, enemies, civilians, boxes, worldInfo, stats,
     builder, tex, state, hud, post,
     setClock: (h) => { state.clock = h; },
+    inspect: () => inspectForward(false),
+    lastInspect: () => lastInspect,
     render: () => {
       post.render(scene, camera);
       renderer.clearDepth();
@@ -170,6 +177,7 @@ onkeydown = (e) => {
     case 'Comma': if (tunerOn) tuneSelect(-1); break;
     case 'Period': if (tunerOn) tuneSelect(1); break;
     case 'KeyF': player.respawn(); weapons.refill(); break;
+    case 'KeyI': inspectForward(keys['ShiftLeft'] || keys['ShiftRight']); break;
     default: break;
   }
 };
@@ -213,6 +221,54 @@ document.addEventListener('pointerlockchange', () => {
   $('pauseHint').classList.toggle('on', started && !locked);
   if (started) state.paused = !locked;
 });
+
+/* ---------------------------------------------------------- 面前资产识别 */
+const fmtV = (v) => `${v.x.toFixed(1)}, ${v.y.toFixed(1)}, ${v.z.toFixed(1)}`;
+
+/** 世界静态资产 + 场上角色（角色会随波次刷新，每次识别时重新收集） */
+function inspectTargets() {
+  const list = builder ? builder.objects.slice() : [];
+  if (enemies) for (const e of enemies.enemies) if (e.inst) list.push(e.inst.group);
+  if (civilians) for (const c of civilians.list) list.push(c.inst.group);
+  return list;
+}
+
+function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => {});
+  } catch (e) { /* 无剪贴板权限时静默失败 */ }
+}
+
+/** 准星指向的模型 → 资产名（I 键；按住 Shift 时同时复制到剪贴板） */
+function inspectForward(copy) {
+  if (!inspector || !hud) return null;
+  camera.updateMatrixWorld(true);
+  const info = inspector.setTargets(inspectTargets()).pick(700);
+  lastInspect = info;
+  if (!info) {
+    hud.toast('前方无可辨识物体', '把准星对准建筑 / 道具 / 载具 / 角色后再按 I');
+    return null;
+  }
+
+  const title = info.kind === 'character' ? `角色 · ${info.label}` : info.label;
+  const bits = [`${info.dist.toFixed(1)} m`, `命中点 ${fmtV(info.point)}`];
+  if (info.kind === 'asset') {
+    bits.push(info.instances > 1 ? `实例 #${info.instanceId ?? 0} / ${info.instances}` : '独立摆放');
+    bits.push(`原点 ${fmtV(info.origin)}`);
+  }
+  if (copy) { copyText(info.name); bits.push('已复制到剪贴板'); }
+  hud.toast(title, bits.join('　'), copy ? 4.4 : 3.4);
+
+  console.log('[资产识别]', info.name, {
+    文件: info.file || '(角色)',
+    距离: +info.dist.toFixed(2),
+    命中点: [+info.point.x.toFixed(2), +info.point.y.toFixed(2), +info.point.z.toFixed(2)],
+    摆放原点: [+info.origin.x.toFixed(2), +info.origin.y.toFixed(2), +info.origin.z.toFixed(2)],
+    实例: info.instanceId,
+    实例总数: info.instances,
+  });
+  return info;
+}
 
 /* ---------------------------------------------------------- 手持模型调参 */
 let tunerOn = false;

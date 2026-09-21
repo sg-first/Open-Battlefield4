@@ -41,6 +41,9 @@ export class HUD {
     this.el.mini = $('miniMap');
     this.el.miniWrap = $('miniWrap');
     this.el.obj = $('hudObjective');
+    this.el.toast = $('hudToast');
+    this.el.toastT = $('hudToastT');
+    this.el.toastS = $('hudToastS');
 
     this.miniCtx = this.el.mini ? this.el.mini.getContext('2d') : null;
     this.kick = 0;
@@ -57,6 +60,7 @@ export class HUD {
     this.mapHalf = 95;         // 小地图半宽（米）
     this.lastFeed = [];
     this.bannerT_ = 0;
+    this.toastTimer = 0;
     if (this.el.mini) {
       this.el.mini.width = 208; this.el.mini.height = 208;
     }
@@ -342,6 +346,17 @@ export class HUD {
     this.bannerT_ = dur;
   }
   setObjective(text) { if (this.el.obj) this.el.obj.textContent = text; }
+
+  /* ---------------------------------------------- 提示条 */
+  toast(msg, sub, dur = 3.4) {
+    const el = this.el.toast;
+    if (!el) return;
+    if (this.el.toastT) this.el.toastT.textContent = msg || '';
+    if (this.el.toastS) this.el.toastS.textContent = sub || '';
+    el.classList.add('on');
+    clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => el.classList.remove('on'), (dur || 3.4) * 1000);
+  }
   onDeath() {
     if (this.el.death) this.el.death.classList.add('on');
   }

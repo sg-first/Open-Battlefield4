@@ -119,6 +119,16 @@
   .feedItem.head{border-color:rgba(255,120,90,.45)}
   .feedItem.head .ico{color:#ff6a4a}
 
+  /* ---------- 资产识别提示 ---------- */
+  #hudToast{position:absolute;left:50%;bottom:23%;transform:translate(-50%,10px);
+    max-width:min(780px,88vw);text-align:center;z-index:8;opacity:0;pointer-events:none;
+    transition:opacity .18s,transform .18s}
+  #hudToast.on{opacity:1;transform:translate(-50%,0)}
+  #hudToastT{font-size:14px;font-weight:700;color:#9fe8ff;letter-spacing:.4px;word-break:break-all;
+    text-shadow:0 2px 10px rgba(0,0,0,.92)}
+  #hudToastS{font-size:11px;color:#a9bccd;margin-top:3px;letter-spacing:.6px;
+    text-shadow:0 1px 6px rgba(0,0,0,.9)}
+
   /* ---------- 小地图 ---------- */
   #miniWrap{bottom:16px;left:50%;transform:translateX(-50%);padding:8px;z-index:6}
   #miniMap{display:block;border-radius:7px;background:#0d1116}
@@ -254,6 +264,7 @@
   <div class="r"><kbd>R</kbd> 换弹　<kbd>1</kbd><kbd>2</kbd> / <kbd>滚轮</kbd> 换枪</div>
   <div class="r"><kbd>M</kbd> 地图　<kbd>T</kbd> 时间加速　<kbd>H</kbd> 隐藏面板</div>
   <div class="r"><kbd>F</kbd> 补给并重生　<kbd>O</kbd> 武器手感调参</div>
+  <div class="r"><kbd>I</kbd> 识别前方资产　<kbd>Shift</kbd>+<kbd>I</kbd> 并复制资产名</div>
   <div class="r"><kbd>Esc</kbd> 释放鼠标</div>
 </div>
 
@@ -261,6 +272,9 @@
 <div id="hudDmgNums"></div>
 <div id="hudIndicators"></div>
 <div id="hudVignette"></div>
+
+<!-- 资产识别提示 -->
+<div id="hudToast"><div id="hudToastT"></div><div id="hudToastS"></div></div>
 
 <!-- 公告 -->
 <div id="hudBanner"><div id="hudBannerT"></div><div id="hudBannerS"></div></div>

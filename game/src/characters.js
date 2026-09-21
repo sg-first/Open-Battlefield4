@@ -342,6 +342,8 @@ export class CharacterFactory {
     const type = this.build(key);
     if (!type) return null;
     const group = new THREE.Group();
+    group.userData.asset = 'character:' + key;      // 供面前资产识别使用
+    group.userData.label = type.spec.label || key;
     const crouchGroup = new THREE.Group();
     const legGroup = new THREE.Group();
     const bodyGroup = new THREE.Group();
