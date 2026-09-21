@@ -55,6 +55,7 @@ const state = {
   showMap: true,
   paused: false,
 };
+const OBJECTIVE_MAIN = '目标：清理街区的敌军';
 
 let audio, hud, player, weapons, enemies, civilians, fx, boxes, worldInfo, post, glowMats = [], bgMats = [];
 let inspector = null, lastInspect = null;
@@ -118,7 +119,7 @@ async function boot() {
 
   inspector = new Inspector({ camera, targets: builder.objects, maxDist: 700 });
 
-  hud.setObjective('目标：清理街区的敌军');
+  hud.setObjective(OBJECTIVE_MAIN);
   hud.setScore(0);
 
   setProgress(1, '就绪');
@@ -136,6 +137,8 @@ async function boot() {
     builder, tex, state, hud, post,
     setClock: (h) => jumpToTime(h),
     toggleTimePanel,
+    toggleFly,
+    flyMode: () => flyMode,
     inspect: () => inspectForward(false),
     lastInspect: () => lastInspect,
     render: () => {
@@ -175,6 +178,7 @@ onkeydown = (e) => {
     case 'Equal': case 'NumpadAdd': jumpToTime(state.clock + (shiftHeld() ? 1 / 6 : 1)); break;
     case 'KeyO': toggleTuner(); break;
     case 'KeyP': if (tunerOn) printTuning(); break;
+    case 'KeyV': toggleFly(); break;
     case 'BracketLeft': if (tunerOn) tuneStep(-1); break;
     case 'BracketRight': if (tunerOn) tuneStep(1); break;
     case 'Comma': if (tunerOn) tuneSelect(-1); break;
@@ -271,6 +275,86 @@ function inspectForward(copy) {
     实例总数: info.instances,
   });
   return info;
+}
+
+/* ---------------------------------------------------------- 自由飞行模式 */
+let flyMode = false;
+const FLY_BASE = 40;          // 巡航速度 m/s
+const FLY_FAST = 120;         // Shift 加速
+const FLY_SMOOTH = 9;         // 速度跟随阻尼，越大越跟手
+const FLY_LIMIT = { xz: 1400, yMin: -25, yMax: 1200 };
+
+const _flyV = new THREE.Vector3();
+const _flyWant = new THREE.Vector3();
+const _flyDir = new THREE.Vector3();
+const _flyRight = new THREE.Vector3();
+const _flyUp = new THREE.Vector3(0, 1, 0);
+
+function toggleFly(on) {
+  flyMode = on === undefined ? !flyMode : !!on;
+  document.body.classList.toggle('flyMode', flyMode);
+  if (flyMode) {
+    if (player.dead) player.respawn();
+    _flyV.set(0, 0, 0);
+    player.vel.set(0, 0, 0);
+    player.onGround = true;
+    hud.setObjective('模式：自由飞行　·　V 返回地面');
+    hud.toast('自由飞行模式', 'WASD 沿视线飞行　空格 上升　Ctrl / C 下降　Shift 加速', 4.6);
+  } else {
+    const p = camera.position;
+    player.pos.set(p.x, boxes.floorAt(p.x, p.z, 400), p.z);
+    player.vel.set(0, 0, 0);
+    player.onGround = true;
+    player.crouch = 0;
+    player.noDamage = false;
+    _flyV.set(0, 0, 0);
+    hud.setObjective(OBJECTIVE_MAIN);
+    hud.toast('回到地面', 'WASD 移动　按 V 可再次起飞', 2.8);
+  }
+}
+
+/** 飞行模式下的相机推进（无重力、无碰撞） */
+function updateFly(dt) {
+  const p = player;
+  const speed = input.sprint ? FLY_FAST : FLY_BASE;
+
+  // 与地面模式共用一套 yaw / pitch，鼠标转视角手感一致
+  camera.rotation.set(p.pitch, p.yaw, 0, 'YXZ');
+  camera.updateMatrixWorld(true);
+
+  camera.getWorldDirection(_flyDir);
+  _flyRight.crossVectors(_flyDir, _flyUp);
+  if (_flyRight.lengthSq() < 1e-8) _flyRight.set(Math.cos(p.yaw), 0, -Math.sin(p.yaw));
+  _flyRight.normalize();
+
+  let up = 0;
+  if (keys['Space']) up += 1;
+  if (keys['ControlLeft'] || keys['ControlRight'] || keys['KeyC']) up -= 1;
+
+  _flyWant.set(0, 0, 0)
+    .addScaledVector(_flyDir, input.forward * speed)
+    .addScaledVector(_flyRight, input.right * speed)
+    .addScaledVector(_flyUp, up * speed * 0.75);
+  _flyV.lerp(_flyWant, 1 - Math.exp(-FLY_SMOOTH * dt));
+  camera.position.addScaledVector(_flyV, dt);
+
+  // 别飞出世界
+  camera.position.x = clamp(camera.position.x, -FLY_LIMIT.xz, FLY_LIMIT.xz);
+  camera.position.z = clamp(camera.position.z, -FLY_LIMIT.xz, FLY_LIMIT.xz);
+  camera.position.y = clamp(camera.position.y, FLY_LIMIT.yMin, FLY_LIMIT.yMax);
+
+  // 同步玩家状态：小地图 / 阳光阴影 / HUD 坐标都跟着相机走
+  p.pos.set(camera.position.x, camera.position.y - p.cfg.eyeStand, camera.position.z);
+  p.vel.set(0, 0, 0);
+  p.speed = _flyV.length();
+  p.onGround = true;
+  p.crouch = 0;
+
+  // 速度感：高速时轻微拉 FOV
+  const fast = clamp((_flyV.length() - FLY_BASE) / (FLY_FAST - FLY_BASE), 0, 1);
+  const fovT = p.fovBase * (1 + fast * 0.12);
+  camera.fov += (fovT - camera.fov) * (1 - Math.exp(-6 * dt));
+  camera.updateProjectionMatrix();
 }
 
 /* ---------------------------------------------------------- 时间跳转 */
@@ -471,7 +555,7 @@ function frame() {
     return;
   }
 
-  const frozen = state.paused || player.dead;
+  const frozen = state.paused || (player.dead && !flyMode);
 
   // ---- 输入映射
   input.forward = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
@@ -483,7 +567,8 @@ function frame() {
   input.adsZoom = input.ads ? weapons.def.adsZoom : 1;
 
   if (!frozen) {
-    player.update(dt, input);
+    if (flyMode) updateFly(dt);
+    else player.update(dt, input);
     camera.updateMatrixWorld(true);
     weapons.setTrigger(mouseDown);
     weapons.update(dt, {

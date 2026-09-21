@@ -52,6 +52,7 @@ export class Player {
 
     this.hp = this.cfg.maxHp;
     this.dead = false;
+    this.noDamage = false;      // 自由飞行模式下为 true
     this.lastHurt = -99;
     this.hurtDir = 0;
     this.damageFlash = 0;
@@ -254,7 +255,7 @@ export class Player {
 
   /* -------------------------------------------- 伤害 */
   takeDamage(dmg, fromPos) {
-    if (this.dead) return false;
+    if (this.dead || this.noDamage) return false;
     this.hp -= dmg;
     this.lastHurt = performance.now() / 1000;
     this.damageFlash = clamp(this.damageFlash + dmg / 45, 0, 1.4);

@@ -138,6 +138,10 @@
   #help{bottom:16px;right:16px;max-width:250px;pointer-events:none}
   #help .r{margin-top:2px}
 
+  /* ---------- 自由飞行 ---------- */
+  body.flyMode #hudCross{opacity:.18}
+  body.flyMode #hudWeapon,body.flyMode #hudWeaponKind,body.flyMode #hudAmmo,body.flyMode #hudAmmoRes{opacity:.35}
+
   /* ---------- 伤害数字 / 受击方向 ---------- */
   #hudDmgNums{position:absolute;inset:0;pointer-events:none;z-index:5}
   .dmgNum{position:absolute;left:0;top:0;font-size:18px;font-weight:800;color:#ffe08a;
@@ -278,6 +282,7 @@
   <div class="r"><kbd>M</kbd> 地图　<kbd>K</kbd> 时间跳转　<kbd>H</kbd> 隐藏面板</div>
   <div class="r"><kbd>F</kbd> 补给并重生　<kbd>O</kbd> 武器手感调参</div>
   <div class="r"><kbd>I</kbd> 识别前方资产　<kbd>Shift</kbd>+<kbd>I</kbd> 并复制资产名</div>
+  <div class="r"><kbd>V</kbd> 自由飞行　<kbd>Shift</kbd> 加速　<kbd>空格</kbd> 上升　<kbd>Ctrl</kbd> 下降</div>
   <div class="r"><kbd>Esc</kbd> 释放鼠标</div>
 </div>
 
