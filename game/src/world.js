@@ -315,6 +315,7 @@ export function buildWorld(o) {
   const cityLights = [];
   const lampMat = new THREE.MeshBasicMaterial({ color: 0x1e242a, toneMapped: false });
   const lampGeo = new THREE.SphereGeometry(0.095, 8, 6);
+  const lampPoles = [];
   const addLamp = (x, z, h = 5.4, color = 0xffd6a0) => {
     const bulb = new THREE.Mesh(lampGeo, lampMat);
     bulb.position.set(x, h, z);
@@ -322,6 +323,7 @@ export function buildWorld(o) {
     const light = new THREE.PointLight(color, 0, 18, 2.1);
     light.position.copy(bulb.position);
     scene.add(bulb, light);
+    lampPoles.push([x, z, h]);
     cityLights.push({ light, bulb, base: 2.4 + rng() * 1.4, color: new THREE.Color(color) });
   };
   // 在中心街区的交叉口和人行道布置暖色钠灯，与玻璃反射/后期高光共同形成夜景深度。
@@ -335,6 +337,22 @@ export function buildWorld(o) {
   for (const z of roadCenters) {
     if (Math.abs(z) > 60) continue;
     for (let x = -210; x <= 210; x += 58) addLamp(x, z - 9.5, 6.1, 0xffd6a2);
+  }
+  // 灯杆：给悬在半空的灯头一个落地支撑（否则白天只能看到飘着的小球）
+  if (lampPoles.length) {
+    const poleGeo = new THREE.CylinderGeometry(0.075, 0.11, 1, 6, 1);
+    poleGeo.translate(0, 0.5, 0);   // 底面贴合 y=0
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x2b3038, roughness: 0.68, metalness: 0.35 });
+    const poles = new THREE.InstancedMesh(poleGeo, poleMat, lampPoles.length);
+    const pm = new THREE.Matrix4(), pv = new THREE.Vector3(), pq = new THREE.Quaternion(), ps = new THREE.Vector3();
+    lampPoles.forEach(([x, z, h], i) => {
+      pv.set(x, 0, z); ps.set(1, h, 1);
+      pm.compose(pv, pq, ps);
+      poles.setMatrixAt(i, pm);
+    });
+    poles.instanceMatrix.needsUpdate = true;
+    poles.castShadow = true;
+    scene.add(poles);
   }
   S.cityLights = cityLights;
   S.lampMat = lampMat;
@@ -393,11 +411,13 @@ export function buildWorld(o) {
         y += rng() < 0.5 ? 2.561 : 5.121;
       }
     }
-    W.place(KITS.roofs[rng() < 0.5 ? 0 : 1], x, y, z, yaw, { tint: t });
-    y += 1.3;
-    if (rng() < 0.65) W.place('objects_architecture_skyscraper_generic_01_skyscraper_generic_roofhouse_01_mesh', x + rng.range(-6, 6), y - 1.4, z + rng.range(-8, 8), rng() * 3, { tint: t });
-    if (rng() < 0.6) W.place('objects_architecture_skyscraper_generic_01_skyscraper_generic_ventilation_01_mesh', x + rng.range(-7, 7), y, z + rng.range(-9, 9), rng() * 3, { tint: t });
-    return y;
+    const roofIdx = rng() < 0.5 ? 0 : 1;
+    W.place(KITS.roofs[roofIdx], x, y, z, yaw, { tint: t });
+    // 屋顶真实顶面（straightroof 1.28m / solidblocks 2.56m）：楼顶设备必须落在这个面上
+    const roofTop = y + (roofIdx === 0 ? 1.28 : 2.56);
+    if (rng() < 0.65) W.place('objects_architecture_skyscraper_generic_01_skyscraper_generic_roofhouse_01_mesh', x + rng.range(-6, 6), roofTop - 0.12, z + rng.range(-8, 8), rng() * 3, { tint: t });
+    if (rng() < 0.6) W.place('objects_architecture_skyscraper_generic_01_skyscraper_generic_ventilation_01_mesh', x + rng.range(-7, 7), roofTop, z + rng.range(-9, 9), rng() * 3, { tint: t });
+    return roofTop;
   }
 
   /** 街面（店招/骑楼）：上层用廉价墙体，底层在中心区域用精细店门 */
@@ -405,14 +425,16 @@ export function buildWorld(o) {
     const yaw = side * Math.PI / 2;
     const edge = CITY.HALF - 0.4;
     const count = Math.floor((CITY.HALF * 2) / 10.24);
-    const dx = side % 2 === 1 ? (side === 1 ? -1 : 1) : 0;
-    const dz = side % 2 === 0 ? (side === 0 ? -1 : 1) : 0;
+    // 指向街区外侧（临街面）：招牌/雨棚必须朝街安装，不能缩进街区内部
+    const dx = side % 2 === 1 ? (side === 1 ? 1 : -1) : 0;
+    const dz = side % 2 === 0 ? (side === 0 ? 1 : -1) : 0;
     for (let k = 0; k < count; k++) {
       const t = -CITY.HALF + 5.12 + k * 10.24;
       let x, z;
       if (side % 2 === 0) { x = cx + t; z = cz + (side === 0 ? edge : -edge); }
       else { x = cx + (side === 1 ? edge : -edge); z = cz + t; }
       const floors = clamp(Math.ceil(clamp(height, 4.2, 12) / 6.4), 1, 2);
+      const wallTop = floors * 6.4;   // 每段墙体高 6.4m
       for (let f = 0; f < floors; f++) {
         let a;
         if (f === 0 && detail && rng() < 0.62) {
@@ -424,17 +446,31 @@ export function buildWorld(o) {
         }
         W.place(a, x, f * 6.4, z, yaw, { tint: tint(0.80, 1.06), collide: f === 0 });
       }
-      // 店招 / 霓虹（只在底层上方，且仅中心街区）
-      if (detail && rng() < 0.5) {
-        const sy = rng.range(3.4, 6.0);
+      // 店招 / 霓虹：中心街区密一些，外圈也有但稀疏（避免整条街都是光墙）
+      // 安装规则：贴住墙面外表面（外推量 ≤ 半厚，避免与墙之间出现悬空缝隙），
+      // 且整块招牌的顶端不超过墙顶；墙太矮挂不下时直接跳过，杜绝悬在空中的招牌。
+      if (rng() < (detail ? 0.55 : 0.3)) {
+        let name, h, out, minY, spin, stand = false;
         const awn = rng();
-        if (awn < 0.28) W.place('objects_props_awning_01_awning_01_mesh', x + dx * 1.4, sy, z + dz * 1.4, yaw + Math.PI, { collide: false });
-        else if (awn < 0.52) W.place('objects_props_awningglass_01_awningglass_01_1024_mesh', x + dx * 1.6, sy, z + dz * 1.6, yaw, { collide: false });
-        else if (awn < 0.76) W.place('objects_props_storesign_01_storesign_01_large_mesh', x + dx * 0.7, sy + 1.2, z + dz * 0.7, yaw + Math.PI, { collide: false });
-        else W.place(rng() < 0.5
-          ? 'objects_props_signs_commercial_signs_sign_v_kanji_512_02_mesh'
-          : 'objects_props_signs_neon_generic_neonsignsquarevertical_512x128_01_cyan_mesh',
-          x + dx * 0.7, sy + 1.6, z + dz * 0.7, yaw, { collide: false });
+        if (awn < 0.28) { name = 'objects_props_awning_01_awning_01_mesh'; h = 1.29; out = 0.60; minY = 3.0; spin = Math.PI; }
+        else if (awn < 0.52) { name = 'objects_props_awningglass_01_awningglass_01_1024_mesh'; h = 0.95; out = 1.55; minY = 3.0; spin = 0; }
+        else if (awn < 0.76) { name = 'objects_props_storesign_01_storesign_01_large_mesh'; h = 1.41; out = 0.12; minY = 3.0; spin = Math.PI; }
+        else if (rng() < (detail ? 0.5 : 0.12)) {
+          // 竖版 V 型招牌是落地灯箱：整块板身从 y=0 一直贯通到 11.4m，没有挂墙支架，
+          // 因此立在店门外的人行道上（墙外 2m ≈ 人行道中线），板面平行临街面。
+          name = 'objects_props_signs_commercial_signs_sign_v_kanji_512_02_mesh'; out = 2.0; spin = 0; stand = true;
+        }
+        else { name = 'objects_props_signs_neon_generic_neonsignsquarevertical_512x128_01_cyan_mesh'; h = 5.12; out = 0.10; minY = 1.6; spin = 0; }
+
+        if (stand) {
+          W.place(name, x + dx * out, 0, z + dz * out, yaw + spin, { collide: true });
+        } else {
+          const hi = wallTop - h - 0.15;
+          if (hi >= minY) {
+            const sy = rng.range(minY, Math.min(hi, minY + 2.4));
+            W.place(name, x + dx * out, sy, z + dz * out, yaw + spin, { collide: false });
+          }
+        }
       }
     }
   }
@@ -480,67 +516,180 @@ export function buildWorld(o) {
   }
 
   function scatterProps(cx, cz) {
-    const r = CITY.HALF - 8;
-    const place = (name, x, z, y = 0, yaw = 0, o = {}) => W.place(name, x, y, z, yaw, o);
-    // 垃圾箱 / 报刊亭 / 自行车
+    // 注意参数顺序与 W.place 一致 (x, y, z)：调用处一律写 place(name, x, 0, z, yaw)
+    const place = (name, x, y = 0, z = 0, yaw = 0, o = {}) => W.place(name, x, y, z, yaw, o);
+    const pick = (list) => list[Math.floor(rng() * list.length)];
+    const jit = (v, j = 0.6) => v + (rng() - 0.5) * j;
+
+    // 常用资产按用途命名——道具要"成组"出现（桌配椅、垃圾斗配垃圾袋、摊位配货箱），而不是孤立乱撒
+    const PR = {
+      trashCan: 'objects_props_streetprops_trashcansmall_02_trashcansmall_02_mesh',
+      dumpster: 'objects_props_dumpster_01_dumpster_01_mesh',
+      bike: 'objects_props_bicyclestationbike_01_bicyclestationbike_01_mesh',
+      stand: 'objects_props_marketstand_01_marketstand_01_basecluster_mesh',
+      planter: 'objects_props_planter_set_01_planterbox_01_256x128_2_mesh',
+      planterWall: 'objects_props_planter_set_01_planterwall_01_256x28_mesh',
+      acUnit: 'objects_props_acunit_01_acunit_01_mesh',
+      acLarge: 'objects_props_airconditioner_large_01_airconditioner_large_01_mesh',
+      supply: 'objects_props_supplycase_01_supplycase_01_mesh',
+      mcrate: 'objects_props_cratemilitary_01_cratemilitary_01_mesh',
+      barrier: 'objects_props_concretebarrier_01_concretebarrier_01_destruction_mesh',
+      sandbag: 'objects_props_sandbagwall_01_sandbagwall_01_mesh',
+      debrisPile: 'objects_props_debrispile_02_debrispile_02_b_mesh',
+      rubble: 'objects_props_rubblepile_01_rubblepile_ground_01b_mesh',
+      girder: 'objects_props_metal_girder_01_metal_girder_01_mesh',
+      pipe: 'objects_props_pipesystem_02_pipesystem_02d_mesh',
+      crate: 'objects_props_cratewoodlight_01_cratewoodlight_01_mesh',
+      boxC: 'objects_props_cardboardbox_01_cardboardbox_01_closed_mesh',
+      boxO: 'objects_props_cardboardbox_01_cardboardbox_01_open_mesh',
+      cone: 'objects_props_trafficcone_01_trafficcone_01_mesh',
+      bucket: 'objects_props_bucket_01_bucket_01_mesh',
+      barrel: 'objects_props_oilbarrel_01_oilbarrel_01_mesh',
+      pallet: 'objects_props_pallet_01_pallet_01_mesh',
+      microDebris: 'objects_props_debrismicro_01_debrismicro_01_mesh',
+      paper: 'objects_props_paperpile_01_paperpile_01_mesh',
+      cables: 'objects_props_cables_01_cable_bundle_medium_mesh',
+      manhole: 'objects_props_manholecover_01_manholecover_01_mesh',
+      puddle: 'objects_props_puddle_puddle_01_mesh',
+      bench: 'objects_props_benchmodern_01_benchmodern_01_cluster_mesh',
+      marbleBench: 'objects_props_marblebench_02_marblebench_02_mesh',
+      chair: 'objects_props_cafechair_01_cafechair_01_mesh',
+      table: 'objects_props_cafetable_01_cafetable_01_mesh',
+      bollard: 'objects_props_crossingbollard_crossingbollard_01_mesh',
+      railing: 'levels_mp_mp_siege_placeholders_railing_01_mesh',
+      lantern: 'objects_props_chineselantern_01_chineselantern_01_mesh',
+      stoneLantern: 'levels_sp_sp_shanghai_objects_stone_lantern_01_stone_lantern_01_mesh',
+      streetLight: 'objects_lights_streetlight_02_streetlight_02_destruction_mesh',
+      pedLight: 'objects_lights_lightpedestrian_01_lightpedestrian_01_mesh',
+      trafficLight: 'objects_props_streetprops_trafficlight_01_trafficlight_01_mesh',
+    };
+
+    // (side, 沿墙距离 t, 离街区中心距离 d) → [x, y, z]；side 0/2 = ±Z 边，1/3 = ±X 边
+    // 返回值可直接展开进 place()：place(name, ...at(side, t, d), yaw)
+    const at = (side, t, d) => side % 2 === 0
+      ? [cx + t, 0, cz + (side === 0 ? d : -d)]
+      : [cx + (side === 1 ? d : -d), 0, cz + t];
+
+    const WALK = CITY.HALF + CITY.SIDEWALK / 2;   // 人行道带（贴店面、避开车道）
+    const YARD = [34, CITY.HALF - 5];             // 天井带（主楼与骑楼之间，飞行视角可见）
+
+    /* ---- 主题堆放：每组道具互相呼应，围绕一个"生活场景" ---- */
+
+    // 店外咖啡座：桌子 + 围放的椅子 + 花箱
+    const cafe = (side, t) => {
+      const yaw = side * Math.PI / 2;
+      for (let k = 0, n = rng.int(1, 2); k < n; k++) {
+        const [x, , z] = at(side, jit(t + k * 2.4), WALK);
+        place(PR.table, x, 0, z, yaw + (rng() - 0.5) * 0.4);
+        for (let c = 0, m = rng.int(1, 2); c < m; c++) {
+          const a = rng() * 6.28;
+          place(PR.chair, x + Math.cos(a) * 0.95, 0, z + Math.sin(a) * 0.95, a + Math.PI);
+        }
+      }
+      if (rng() < 0.7) place(PR.planter, ...at(side, jit(t + rng.range(-1.5, 1.5)), WALK + 1.1), yaw);
+      if (rng() < 0.4) place(PR.planterWall, ...at(side, jit(t + rng.range(-2, 2)), WALK - 1.0), yaw);
+    };
+
+    // 垃圾点：垃圾斗 + 一排垃圾桶 + 散落的纸箱纸堆
+    const garbage = (side, t) => {
+      const yaw = side * Math.PI / 2;
+      if (rng() < 0.55) place(PR.dumpster, ...at(side, jit(t), WALK), yaw + (rng() < 0.5 ? 0 : Math.PI));
+      for (let k = 0, n = rng.int(2, 3); k < n; k++) {
+        place(PR.trashCan, ...at(side, jit(t + rng.range(-2.6, 2.6)), WALK + rng.range(-0.5, 0.5)), rng() * 6);
+      }
+      for (let k = 0, n = rng.int(2, 4); k < n; k++) {
+        place(pick([PR.boxC, PR.boxO, PR.paper, PR.bucket]), ...at(side, jit(t + rng.range(-3, 3), 1.2), WALK + rng.range(-0.8, 0.8)), rng() * 6);
+      }
+    };
+
+    // 早点摊/排档：摊位 + 周围的货箱油桶 + 托盘
+    const market = (side, t) => {
+      const yaw = side * Math.PI / 2;
+      place(PR.stand, ...at(side, jit(t), WALK + 0.4), yaw + (rng() < 0.5 ? 0 : Math.PI));
+      for (let k = 0, n = rng.int(2, 4); k < n; k++) {
+        place(pick([PR.crate, PR.boxC, PR.boxO, PR.barrel]), ...at(side, jit(t + rng.range(-2.4, 2.4), 1.2), WALK + rng.range(-0.6, 1.0)), rng() * 6);
+      }
+      if (rng() < 0.6) place(PR.pallet, ...at(side, jit(t + rng.range(-2.5, 2.5)), WALK), rng() * 6);
+    };
+
+    // 停车带：一排自行车 + 护柱
+    const bikes = (side, t) => {
+      const yaw = side * Math.PI / 2;
+      for (let k = 0, n = rng.int(2, 3); k < n; k++) {
+        place(PR.bike, ...at(side, t + k * 1.35 + rng.range(-0.15, 0.15), WALK + 0.2), yaw + (rng() - 0.5) * 0.25);
+      }
+      if (rng() < 0.5) place(PR.bollard, ...at(side, jit(t - 2), WALK), yaw);
+    };
+
+    // 施工围挡：一溜锥形桶 + 沙袋/水泥墩 + 线缆钢梁
+    const worksite = (side, t) => {
+      const yaw = side * Math.PI / 2;
+      for (let k = 0, n = rng.int(3, 5); k < n; k++) {
+        place(PR.cone, ...at(side, t + k * 1.7, WALK + rng.range(-0.2, 0.2)), rng() * 6);
+      }
+      place(rng() < 0.5 ? PR.sandbag : PR.barrier, ...at(side, jit(t + rng.range(-1, 5)), WALK - 0.4), yaw);
+      if (rng() < 0.6) place(rng() < 0.5 ? PR.cables : PR.girder, ...at(side, jit(t + rng.range(-2, 4)), WALK + 0.5), rng() * 6);
+    };
+
+    // 杂物堆：纸箱/托盘/油桶挤在一小片区域
+    const junk = (side, t) => {
+      const d = rng() < 0.6 ? WALK : rng.range(YARD[0], YARD[1]);
+      for (let k = 0, n = rng.int(3, 5); k < n; k++) {
+        place(pick([PR.boxC, PR.boxO, PR.pallet, PR.barrel, PR.bucket, PR.crate, PR.paper, PR.supply]),
+          ...at(side, jit(t + rng.range(-1.6, 1.6), 1.4), d + rng.range(-0.8, 0.8)), rng() * 6);
+      }
+    };
+
+    // 天井：主楼背后/骑楼内侧的杂物与战争痕迹（飞行视角下街区内部不再空荡）
+    const courtyard = (side, t) => {
+      const d = rng.range(YARD[0], YARD[1]);
+      place(pick([PR.rubble, PR.debrisPile, PR.acUnit, PR.acLarge, PR.pipe, PR.sandbag, PR.mcrate]),
+        ...at(side, jit(t + rng.range(-3, 3), 2.4), d), rng() * 6);
+      for (let k = 0, n = rng.int(2, 4); k < n; k++) {
+        place(pick([PR.microDebris, PR.boxC, PR.paper, PR.barrel, PR.pallet]),
+          ...at(side, jit(t + rng.range(-4, 4), 3), d + rng.range(-2.5, 2.5)), rng() * 6);
+      }
+    };
+
+    /* ---- 沿四条边扫过：每 ~11m 一段分配一个主题，沿街形成有节奏的店面外摆 ---- */
+    for (const side of [0, 1, 2, 3]) {
+      for (let s = 0; s < 8; s++) {
+        const t = -CITY.HALF + 5.6 + s * 11.25 + rng.range(-1.2, 1.2);
+        const roll = rng();
+        if (roll < 0.24) cafe(side, t);
+        else if (roll < 0.44) garbage(side, t);
+        else if (roll < 0.60) market(side, t);
+        else if (roll < 0.74) bikes(side, t);
+        else if (roll < 0.88) worksite(side, t);
+        else junk(side, t);
+        if (rng() < 0.4) courtyard(side, t);   // 部分段落在天井里补一堆
+      }
+    }
+
+    // 路面细节：井盖顺着行车线排、水洼零星点缀（属于马路，不属于人行道）
+    for (const side of [0, 1, 2, 3]) {
+      for (let k = 0; k < 2; k++) {
+        const [x, , z] = at(side, rng.range(-CITY.HALF + 8, CITY.HALF - 8), B / 2 + rng.range(-3.5, 3.5));
+        place(PR.manhole, x, 0.03, z, rng() * 6, { collide: false });
+      }
+      for (let k = 0, n = rng.int(0, 2); k < n; k++) {
+        const [x, , z] = at(side, rng.range(-CITY.HALF + 8, CITY.HALF - 8), B / 2 + rng.range(-5.5, 5.5));
+        place(PR.puddle, x, 0.03, z, rng() * 6, { collide: false });
+      }
+    }
+
+    // 路灯贴人行道、灯笼摆在店门口、行人灯随机分布
     for (let k = 0; k < 2; k++) {
-      const a = rng() * 6.28, d = rng.range(10, r);
-      const x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
-      const t = rng();
-      if (t < 0.22) place('objects_props_streetprops_trashcansmall_02_trashcansmall_02_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.4) place('objects_props_dumpster_01_dumpster_01_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.55) place('objects_props_bicyclestationbike_01_bicyclestationbike_01_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.68) place('objects_props_marketstand_01_marketstand_01_basecluster_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.8) place('objects_props_planter_set_01_planterbox_01_256x128_2_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.9) place('objects_props_acunit_01_acunit_01_mesh', x, 0, z, rng() * 6);
-      else place('objects_props_supplycase_01_supplycase_01_mesh', x, 0, z, rng() * 6);
+      place(PR.streetLight, ...at(k === 0 ? 0 : 2, rng.range(-CITY.HALF + 6, CITY.HALF - 6), WALK + 0.9), (k === 0 ? 0 : Math.PI));
     }
-    // 战争痕迹
-    if (rng() < 0.5) {
-      const a = rng() * 6.28, d = rng.range(8, r);
-      const x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
-      const t = rng();
-      if (t < 0.3) place('objects_props_concretebarrier_01_concretebarrier_01_destruction_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.55) place('objects_props_sandbagwall_01_sandbagwall_01_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.75) place('objects_props_debrispile_02_debrispile_02_b_mesh', x, 0, z, rng() * 6);
-      else place('objects_props_rubblepile_01_rubblepile_ground_01b_mesh', x, 0, z, rng() * 6);
+    for (let k = 0; k < 2; k++) {
+      place(rng() < 0.5 ? PR.lantern : PR.stoneLantern, ...at(rng.int(0, 3), rng.range(-CITY.HALF + 6, CITY.HALF - 6), WALK + 0.6), rng() * 6, { collide: false });
     }
-    // 灯笼 / 招牌 / 灯柱
-    if (rng() < 0.45) {
-      const a = rng() * 6.28, d = CITY.HALF - 1.6;
-      const x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
-      place(rng() < 0.5
-        ? 'objects_props_chineselantern_01_chineselantern_01_mesh'
-        : 'levels_sp_sp_shanghai_objects_stone_lantern_01_stone_lantern_01_mesh',
-        x, rng() < 0.5 ? 3.4 : 0, z, rng() * 6, { collide: false });
-    }
-    if (rng() < 0.6) {
-      const a = rng() * 6.28, d = CITY.HALF - 0.9;
-      place('objects_lights_streetlight_02_streetlight_02_destruction_mesh',
-        cx + Math.cos(a) * d, 0, cz + Math.sin(a) * d, a + Math.PI / 2);
-    }
-    if (rng() < 0.5) {
-      place('objects_lights_lightpedestrian_01_lightpedestrian_01_mesh',
-        cx + rng.range(-CITY.HALF + 4, CITY.HALF - 4), 0, cz + rng.range(-CITY.HALF + 4, CITY.HALF - 4), rng() * 6);
+    for (let k = 0; k < 2; k++) {
+      place(PR.pedLight, ...at(rng.int(0, 3), rng.range(-CITY.HALF + 6, CITY.HALF - 6), WALK), rng() * 6);
     }
     // 路口的红绿灯
-    place('objects_props_streetprops_trafficlight_01_trafficlight_01_mesh',
-      cx + CITY.HALF + 4.4, 0, cz + CITY.HALF + 4.4, rng() * 6);
-    // 小杂物
-    for (let k = 0; k < 3; k++) {
-      const a = rng() * 6.28, d = rng.range(6, r);
-      const t = rng();
-      const x = cx + Math.cos(a) * d, z = cz + Math.sin(a) * d;
-      if (t < 0.2) place('objects_props_cratewoodlight_01_cratewoodlight_01_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.34) place('objects_props_cardboardbox_01_cardboardbox_01_closed_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.46) place('objects_props_cardboardbox_01_cardboardbox_01_open_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.56) place('objects_props_trafficcone_01_trafficcone_01_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.66) place('objects_props_bucket_01_bucket_01_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.74) place('objects_props_oilbarrel_01_oilbarrel_01_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.82) place('objects_props_pallet_01_pallet_01_mesh', x, 0, z, rng() * 6);
-      else if (t < 0.9) place('objects_props_debrismicro_01_debrismicro_01_mesh', x, 0, z, rng() * 6);
-      else place('objects_props_paperpile_01_paperpile_01_mesh', x, 0, z, rng() * 6);
-    }
+    place(PR.trafficLight, cx + CITY.HALF + 4.4, 0, cz + CITY.HALF + 4.4, rng() * 6);
   }
 
   /* ---------------- 中央喷泉广场 ---------------- */
@@ -573,7 +722,7 @@ export function buildWorld(o) {
       W.place('levels_sp_sp_shanghai_objects_stone_lantern_01_stone_lantern_01_mesh',
         plaza.x + Math.cos(a) * d, 0, plaza.z + Math.sin(a) * d, 0, { collide: true });
       W.place('objects_props_chineselantern_01_chineselantern_01_mesh',
-        plaza.x + Math.cos(a + 0.3) * 20, 3.4, plaza.z + Math.sin(a + 0.3) * 20, 0, { collide: false });
+        plaza.x + Math.cos(a + 0.3) * 20, 0, plaza.z + Math.sin(a + 0.3) * 20, 0, { collide: false });
     }
     // 广场上的坦克与直升机残骸（放在街区边缘）
     W.place('gameplay_vehicles_ch_mbt_type99_spec_ch_mbt_type99_sp_shanghaichase_mesh', plaza.x + 33, 0, plaza.z - 30, 0.7, { collide: true });
@@ -644,6 +793,118 @@ export function buildWorld(o) {
     }
     W.place('objects_vehicles_truckch_01_truckch_01_mesh', CITY.HALF + 8, 0, -B * 2 - 4, 1.6, { collide: true });
     W.place('objects_vehicles_truckch_01_truckch_01_mesh', -CITY.HALF - 10, 0, B * 1 + 6, 0.2, { collide: true });
+
+    // 战场感：马路上横七竖八的弃车与残骸——不等距、不定向、带一点侧倾
+    const wreckYaw = () => {
+      const u = rng();
+      if (u < 0.38) return rng.range(-0.35, 0.35);                 // 基本顺向，撞歪了
+      if (u < 0.74) return Math.PI / 2 + rng.range(-0.45, 0.45);   // 横在路中央
+      return rng() * Math.PI * 2;                                  // 彻底乱转
+    };
+    const wreck = (x, z, yawBias = wreckYaw()) => {
+      const t = rng();
+      // 残骸为主（wreck_cluster / 烧毁面包车），夹杂几辆遗弃的完好车
+      const a = t < 0.34 ? carAssets[2] : t < 0.56 ? carAssets[0] : t < 0.78 ? carAssets[1] : t < 0.92 ? carAssets[4] : carAssets[3];
+      W.place(a, x, 0, z, yawBias, {
+        collide: true,
+        tiltX: rng.range(-0.05, 0.05),
+        tiltZ: rng.range(-0.065, 0.065),
+      });
+    };
+    // 两条方向的车道都扫一遍：每 20~42m 一辆，横向位置覆盖整幅路面（偶尔蹭上路缘）
+    for (const rc of roadCenters) {
+      for (let s = cityMin + 12; s < cityMax - 8; s += rng.range(20, 42)) {
+        wreck(rc + rng.range(-10.8, 10.8), s);           // 纵向路（沿 Z）
+        wreck(s, rc + rng.range(-10.8, 10.8));           // 横向路（沿 X）
+      }
+    }
+    // 部分十字路口中央再横一辆，堵住路口
+    for (const rx of roadCenters) {
+      for (const rz of roadCenters) {
+        if (rng() < 0.4) wreck(rx + rng.range(-4.5, 4.5), rz + rng.range(-4.5, 4.5));
+      }
+    }
+  }
+
+  /* ---------------- 路面战场痕迹：街垒 / 瓦砾 / 沙袋工事 / 散落物 ---------------- */
+  {
+    const pick = (list) => list[Math.floor(rng() * list.length)];
+    // 长轴在 Z 的（水泥墩 4m / 沙袋墙 5.3m / 钢梁）与长轴在 X 的（防爆栅栏 2.8m / 铁丝网）分别定朝向，
+    // 保证它们能横跨路面排成街垒。axis 0 = 道路沿 Z，axis 1 = 道路沿 X。
+    const crossYaw = (axis, longZ) => axis === 0 ? (longZ ? Math.PI / 2 : 0) : (longZ ? 0 : Math.PI / 2);
+    const RD = {
+      barrier: 'objects_props_concretebarrier_01_concretebarrier_01_destruction_mesh',
+      sandbag: 'objects_props_sandbagwall_01_sandbagwall_01_mesh',
+      riot: 'objects_props_riotfence_riotfence_01_mesh',
+      fence: 'objects_props_fenceparc_01_fenceparc_01_mesh',
+      rubble: 'objects_props_rubblepile_01_rubblepile_ground_01b_mesh',
+      debris: 'objects_props_debrispile_02_debrispile_02_b_mesh',
+      girder: 'objects_props_metal_girder_01_metal_girder_01_mesh',
+      pipe: 'objects_props_pipesystem_02_pipesystem_02d_mesh',
+      cables: 'objects_props_cables_01_cable_bundle_medium_mesh',
+      cone: 'objects_props_trafficcone_01_trafficcone_01_mesh',
+      barrel: 'objects_props_oilbarrel_01_oilbarrel_01_mesh',
+      box: 'objects_props_cardboardbox_01_cardboardbox_01_closed_mesh',
+      micro: 'objects_props_debrismicro_01_debrismicro_01_mesh',
+      paper: 'objects_props_paperpile_01_paperpile_01_mesh',
+    };
+    // 道路局部坐标 → 世界：u 沿路推进，v 横跨路面（相对路中心线）
+    const onRoad = (axis, rc, u, v) => axis === 0 ? [rc + v, 0, u] : [u, 0, rc + v];
+
+    // 街垒：一排水泥墩/防爆栅栏横跨半幅路，垒后补沙袋、周围撒锥形桶
+    const roadblock = (axis, rc, u, v) => {
+      const n = rng.int(2, 4);
+      const useBarrier = rng() < 0.6;
+      for (let k = 0; k < n; k++) {
+        const name = useBarrier ? RD.barrier : (rng() < 0.7 ? RD.riot : RD.fence);
+        W.place(name, ...onRoad(axis, rc, u + rng.range(-0.3, 0.3), v + (k - (n - 1) / 2) * 3.4),
+          crossYaw(axis, name === RD.barrier) + rng.range(-0.06, 0.06), { collide: true });
+      }
+      W.place(RD.sandbag, ...onRoad(axis, rc, u + rng.range(-2.5, 2.5), v + (rng() < 0.5 ? 3.2 : -3.2)),
+        crossYaw(axis, true) + rng.range(-0.35, 0.35), { collide: true });
+      for (let k = 0, m = rng.int(1, 3); k < m; k++) {
+        W.place(RD.cone, ...onRoad(axis, rc, u + rng.range(-7, 7), v + rng.range(-4, 4)), rng() * 6);
+      }
+    };
+    // 炸出来的瓦砾
+    const rubbleField = (axis, rc, u, v) => {
+      W.place(rng() < 0.5 ? RD.rubble : RD.debris, ...onRoad(axis, rc, u, v), rng() * 6);
+      for (let k = 0, n = rng.int(2, 4); k < n; k++) {
+        W.place(pick([RD.micro, RD.box, RD.paper, RD.cables]), ...onRoad(axis, rc, u + rng.range(-4, 4), v + rng.range(-4, 4)), rng() * 6);
+      }
+    };
+    // 散落的战场垃圾：钢梁/管子横在路面上，油桶滚到一边
+    const scatterField = (axis, rc, u, v) => {
+      for (let k = 0, n = rng.int(2, 4); k < n; k++) {
+        const name = pick([RD.girder, RD.pipe, RD.cables, RD.barrel, RD.box, RD.micro]);
+        W.place(name, ...onRoad(axis, rc, u + rng.range(-3, 3), v + rng.range(-5, 5)),
+          name === RD.girder ? crossYaw(axis, true) + rng.range(-0.8, 0.8) : rng() * 6);
+      }
+    };
+    // 沙袋工事：并排的沙袋墙 + 锥桶，偶尔再加一个水泥墩
+    const sandbagNest = (axis, rc, u, v) => {
+      for (let k = 0, n = rng.int(2, 3); k < n; k++) {
+        W.place(RD.sandbag, ...onRoad(axis, rc, u + (k - (n - 1) / 2) * 4.6 + rng.range(-0.4, 0.4), v),
+          crossYaw(axis, true) + rng.range(-0.2, 0.2), { collide: true });
+      }
+      for (let k = 0, m = rng.int(1, 2); k < m; k++) {
+        W.place(RD.cone, ...onRoad(axis, rc, u + rng.range(-5, 5), v + rng.range(-3, 3)), rng() * 6);
+      }
+      if (rng() < 0.5) W.place(RD.barrier, ...onRoad(axis, rc, u + rng.range(-3, 3), v + (rng() < 0.5 ? 5 : -5)), crossYaw(axis, true), { collide: true });
+    };
+
+    for (const rc of roadCenters) {
+      for (let s = cityMin + 16; s < cityMax - 10; s += rng.range(30, 60)) {
+        for (const axis of [0, 1]) {
+          const roll = rng(), u = s + rng.range(-6, 6), v = rng.range(-9, 9);
+          if (roll < 0.3) roadblock(axis, rc, u, v);
+          else if (roll < 0.55) rubbleField(axis, rc, u, v);
+          else if (roll < 0.8) scatterField(axis, rc, u, v);
+          else if (roll < 0.92) sandbagNest(axis, rc, u, v);
+          // 其余位置留空，别把每段路都塞满
+        }
+      }
+    }
   }
 
   /* ---------------- 远景天际线 ----------------
@@ -662,7 +923,9 @@ export function buildWorld(o) {
       const a = rng() * Math.PI * 2;
       const d = rng.range(390, 1150);
       const x = Math.cos(a) * d + 60, z = Math.sin(a) * d;
-      if (x < CITY.QUAY_X - 30) continue;          // 不落在江面上
+      // 必须落在地面范围内（地面 x∈[-300,1400]，z∈[-1100,1100]）：
+      // 越界就会立在江面或地面之外，看起来整栋悬空。
+      if (x < CITY.QUAY_X + 6 || x > 1380 || Math.abs(z) > 1080) continue;
       const inner = Math.max(Math.abs(x), Math.abs(z)) < 330;
       if (inner) continue;
       const fa = skyAssets[rng.int(0, 2)];
@@ -678,7 +941,7 @@ export function buildWorld(o) {
       built++;
     }
     // 地标：上海中心与另一座超高层
-    W.place('objects_props_siegeskyline_shanghaitower_01_mesh', -360, 0, -610, 0.4, { collide: false });
+    W.place('objects_props_siegeskyline_shanghaitower_01_mesh', -250, 0, -610, 0.4, { collide: false });
     W.place('objects_props_siegeskyline_shanghaitower_02_mesh', 500, 0, -720, -0.6, { collide: false });
   }
 
