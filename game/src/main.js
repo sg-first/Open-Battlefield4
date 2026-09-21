@@ -99,6 +99,7 @@ async function boot() {
   weapons = new WeaponSystem({
     camera, fx, audio, boxes, hud, assets, fov: 78,
     tuning: loadTuning(),
+    environment: worldInfo.environment ? worldInfo.environment.texture : null,
   });
   weapons.setViewport(innerWidth / innerHeight, camera.fov);
   hud.setWeapon(weapons.current);
@@ -379,6 +380,12 @@ function printTuning() {
 
 /* ---------------------------------------------------------- 天空与光照 */
 const _sunDir = new THREE.Vector3();
+const _vmSun = new THREE.Vector3();
+const _camQ = new THREE.Quaternion();
+const _vmSunCol = new THREE.Color();
+const _vmSkyCol = new THREE.Color();
+const _vmGndCol = new THREE.Color();
+const VM_FILL_NEUTRAL = new THREE.Color(0xffffff);
 function updateSky(dt) {
   if (!timePanelOpen) state.clock = (state.clock + dt * state.timeFlow) % 24;   // 调整时间面板打开时定格
   const dir = sunDirAt(state.clock);
@@ -412,6 +419,25 @@ function updateSky(dt) {
   // 曝光由后期链自己做（渲染到离屏目标时 renderer 的 toneMapping/曝光不生效）
   post && post.setExposure(st.exp);
   scene.environmentIntensity = 0.82 + (1 - night) * 0.22;
+
+  // 手持模型跟随场景光照：太阳色/方向 + 天空补光 + 环境反射强度
+  if (weapons) {
+    camera.getWorldQuaternion(_camQ).invert();
+    _vmSun.copy(_sunDir).applyQuaternion(_camQ);
+    // 相机看向 -Z：夹住 z 让光源始终略微在身前，转身背对太阳时枪面不会全黑
+    if (_vmSun.z > -0.2) _vmSun.z = -0.2;
+    _vmSun.normalize();
+    weapons.setSkyLighting({
+      sunColor: _vmSunCol.set(st.sun),
+      sunDir: _vmSun,
+      sunIntensity: 1.0 + st.dir * 0.75,
+      // 纯天空色当补光会把暗色枪身染成蓝灰，向白去饱和后再用
+      skyColor: _vmSkyCol.set(st.top).lerp(VM_FILL_NEUTRAL, 0.6),
+      groundColor: _vmGndCol.set(st.bot).lerp(VM_FILL_NEUTRAL, 0.4),
+      fillIntensity: 0.45 + st.hemi * 0.6,
+      envIntensity: scene.environmentIntensity,
+    });
+  }
   if (worldInfo.cityLights) {
     for (const it of worldInfo.cityLights) {
       it.light.intensity = night * it.base;

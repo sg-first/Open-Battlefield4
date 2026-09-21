@@ -382,7 +382,12 @@ const PRESETS = {
   building: { roughness: 0.88, metalness: 0.04, env: 0.45 },
   prop: { roughness: 0.76, metalness: 0.14, env: 0.6 },
   vehicle: { roughness: 0.38, metalness: 0.45, env: 1.0 },
-  weapon: { roughness: 0.38, metalness: 0.55, env: 1.0 },
+  // 枪械是阳极氧化铝 + 聚合物 + 漆面，不是裸金属：
+  // 金属度必须压得很低（否则漫反射被吃掉、反照率变成金属反射色），
+  // 光泽交由 clearcoat 这层清漆来表现。
+  // 工程塑料/漆面不需要厚清漆：clearcoat 与 env 提供的是「不带反照率色」的
+  // 中性高光，一旦压过暗色漫反射，棕色枪身就会被洗成冷灰、看起来像裸金属。
+  weapon: { roughness: 0.56, metalness: 0.06, env: 0.42, coat: 0.18, coatRough: 0.45 },
   character: { roughness: 0.70, metalness: 0.05, env: 0.5 },
   ground: { roughness: 0.95, metalness: 0.02, env: 0.25 },
   backdrop: { roughness: 1.0, metalness: 0.0, env: 0.15 },
@@ -401,7 +406,9 @@ export async function makeMaterial(tex, ref, opt = {}) {
   const nm = (src.Kd || '') + ' ' + (src.Bump || '') + ' ' + (opt.tag || '');
   const reflectiveFacade = /glass|window|facade|skyscraper/i.test(nm) && !/broken|destr/i.test(nm);
   const transparentGlass = /glass|window/i.test(nm) && !/broken|destr/i.test(nm);
-  const usePhysical = reflectiveFacade || opt.preset === 'building' || opt.preset === 'vehicle';
+  // 需要清漆层（漆面）时也必须走 Physical，MeshStandardMaterial 没有 clearcoat
+  const usePhysical = reflectiveFacade || opt.preset === 'building'
+    || opt.preset === 'vehicle' || preset.coat !== undefined;
   const Material = usePhysical ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
   const params = {
     map,
@@ -414,8 +421,8 @@ export async function makeMaterial(tex, ref, opt = {}) {
   };
   // clearcoat 只有 Physical 材质支持，写给 Standard 会被忽略并刷警告
   if (usePhysical) {
-    params.clearcoat = reflectiveFacade ? 0.76 : 0.18;
-    params.clearcoatRoughness = reflectiveFacade ? 0.14 : 0.48;
+    params.clearcoat = preset.coat !== undefined ? preset.coat : (reflectiveFacade ? 0.76 : 0.18);
+    params.clearcoatRoughness = preset.coatRough !== undefined ? preset.coatRough : (reflectiveFacade ? 0.14 : 0.48);
   }
   const mat = new Material(params);
   if (normalMap) mat.normalScale.set(opt.normalScale ?? 1, opt.normalScale ?? 1);

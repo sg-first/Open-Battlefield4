@@ -160,11 +160,13 @@ export class WeaponSystem {
     this.vmCamera.add(this.root);
     this.vmScene.add(this.vmCamera);
 
-    const vmLight = new THREE.DirectionalLight(0xfff2e0, 1.5);
-    vmLight.position.set(-0.6, 1, 0.8);
-    this.vmScene.add(vmLight);
-    const vmFill = new THREE.HemisphereLight(0xa8c4e8, 0x30323a, 1.2);
-    this.vmScene.add(vmFill);
+    this.vmLight = new THREE.DirectionalLight(0xfff2e0, 1.5);
+    this.vmLight.position.set(-0.6, 1, 0.8);
+    this.vmScene.add(this.vmLight);
+    this.vmFill = new THREE.HemisphereLight(0xa8c4e8, 0x30323a, 1.2);
+    this.vmScene.add(this.vmFill);
+    // 与主场景共享预过滤环境贴图：武器材质金属度高，没有 IBL 会明显发暗
+    if (o.environment) this.vmScene.environment = o.environment;
     this.flashTex = makeFlashTexture(256, 5);
 
     this.slots = ['scar', 'ump'];
@@ -683,6 +685,26 @@ export class WeaponSystem {
     v.set(-1, 0, 0).applyMatrix4(_m4);
     v.applyQuaternion(this.camera.getWorldQuaternion(_q2));
     return v.normalize();
+  }
+
+  /**
+   * 让手持模型跟随场景光照，否则它既不受日夜变化影响、也一直是暗的。
+   * sunDir 需传入「相机空间」的太阳方向（vmScene 的世界坐标即相机空间）。
+   */
+  setSkyLighting(o) {
+    if (o.sunColor) this.vmLight.color.copy(o.sunColor);
+    if (o.sunIntensity !== undefined) this.vmLight.intensity = o.sunIntensity;
+    if (o.sunDir) {
+      this.vmLight.position.copy(o.sunDir);
+      if (this.vmLight.position.lengthSq() < 1e-6) this.vmLight.position.set(0, 0, -1);
+      this.vmLight.position.normalize().multiplyScalar(3);
+    }
+    if (o.skyColor) this.vmFill.color.copy(o.skyColor);
+    if (o.groundColor) this.vmFill.groundColor.copy(o.groundColor);
+    if (o.fillIntensity !== undefined) this.vmFill.intensity = o.fillIntensity;
+    if (o.envIntensity !== undefined && this.vmScene.environment) {
+      this.vmScene.environmentIntensity = o.envIntensity;
+    }
   }
 
   /** 视口变化时同步手持模型相机 */
