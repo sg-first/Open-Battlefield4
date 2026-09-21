@@ -403,17 +403,21 @@ export async function makeMaterial(tex, ref, opt = {}) {
   const transparentGlass = /glass|window/i.test(nm) && !/broken|destr/i.test(nm);
   const usePhysical = reflectiveFacade || opt.preset === 'building' || opt.preset === 'vehicle';
   const Material = usePhysical ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
-  const mat = new Material({
+  const params = {
     map,
     normalMap,
     roughness: reflectiveFacade ? Math.min(preset.roughness, 0.34) : preset.roughness,
     metalness: reflectiveFacade ? Math.max(preset.metalness, 0.16) : preset.metalness,
     envMapIntensity: reflectiveFacade ? Math.max(preset.env, 1.25) : preset.env,
-    clearcoat: usePhysical ? (reflectiveFacade ? 0.76 : 0.18) : 0,
-    clearcoatRoughness: reflectiveFacade ? 0.14 : 0.48,
     side: opt.side ?? THREE.FrontSide,
     fog: opt.fog !== false,
-  });
+  };
+  // clearcoat 只有 Physical 材质支持，写给 Standard 会被忽略并刷警告
+  if (usePhysical) {
+    params.clearcoat = reflectiveFacade ? 0.76 : 0.18;
+    params.clearcoatRoughness = reflectiveFacade ? 0.14 : 0.48;
+  }
+  const mat = new Material(params);
   if (normalMap) mat.normalScale.set(opt.normalScale ?? 1, opt.normalScale ?? 1);
 
   if (transparentGlass && opt.glass !== false) {
@@ -496,14 +500,20 @@ export async function loadAsset(tex, name, opt = {}) {
     if (usable) {
       material = await makeMaterial(tex, g.ref, opt);
     } else {
-      // 缺少材质 / 贴图是调试色块：重新投影 UV 并套用程序化材质
+      // 缺少材质 / 贴图是调试色块：套用程序化材质。
+      // 关键点：程序化贴图按「世界单位 / 次循环」设计，必须用自己的重投影 UV，
+      // 资产自带的 UV 密度往往比设计尺度高一个数量级（会把立面压成噪点）。
       const kind = pickMatKind(name);
-      if (!hasValidUV(geometry)) boxProjectUV(geometry, PROC[kind].scale, hashName(name));
+      const cfg = PROC[kind] || PROC.concrete;
+      const variant = hashName(name) % 4;
+      if (opt.procKeepUV !== true) {
+        boxProjectUV(geometry, cfg.tile[0], cfg.tile[1], variant);
+      }
       paintVertexColor(geometry, hashName(name) % 9973,
-        kind === 'glass' ? { tint: 0xd7e7ee } : { grime: true });
+        kind === 'glass' ? { tint: 0xe6eef2 } : { grime: true });
       material = procMaterial(kind, {
         low: !!opt.procLow,
-        variant: hashName(name) % 4,
+        variant,
       });
     }
     parts.push({ geometry, material });

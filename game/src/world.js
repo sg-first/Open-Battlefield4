@@ -110,7 +110,7 @@ export function buildWorld(o) {
   /* ---------------- 光照与天空 ---------------- */
   const sun = new THREE.DirectionalLight(0xffffff, 2.6);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(4096, 4096);
+  sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 420;
   sun.shadow.camera.left = -84; sun.shadow.camera.right = 84;

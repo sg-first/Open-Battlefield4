@@ -3,6 +3,7 @@
    ============================================================ */
 import * as THREE from 'three';
 import { loadAsset, TexCache, clipGeometryY } from './obj.js';
+import { reattachProcShader, windowMaskFor } from './proc.js';
 import { yieldFrame } from './util.js';
 
 /* ---------------------------------------------------------- 资产清单 */
@@ -251,7 +252,8 @@ export async function loadAll(tex, onProgress) {
       if (it.night) {
         for (const p of asset.parts) {
           p.material.emissive = new THREE.Color(0xffc27a);
-          if (p.material.map) p.material.emissiveMap = p.material.map;
+          // 程序化材质用窗光遮罩，夜景是零散点亮的窗格而非整墙均匀发亮
+          if (p.material.map) p.material.emissiveMap = windowMaskFor(p.material) || p.material.map;
           p.material.emissiveIntensity = 0;
           p.material.userData.glow = it.night;
           glowMats.push(p.material);
@@ -394,6 +396,7 @@ export class WorldBuilder {
         let mat = part.material;
         if (r.tint) {
           mat = mat.clone();
+          reattachProcShader(mat);   // clone 会丢掉程序化材质的三平面着色器钩子
           mat.color.multiply(r.tint);
         }
         const mesh = new THREE.Mesh(part.geometry, mat);
