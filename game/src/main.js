@@ -85,6 +85,8 @@ async function boot() {
   post = new PostFX(renderer);
   audio = new GameAudio();
   fx = new FX(scene, camera, boxes);
+  // 燃烧点：楼顶/残骸上冒出的浓烟柱与火光
+  if (worldInfo.fires) for (const f of worldInfo.fires) fx.addFire(f.x, f.y, f.z, f.s);
   hud = new HUD({ camera, boxes, extent: worldInfo.extent * 1.05 });
   hud.buildStaticMap();
   camera.position.set(0, 2, 0);

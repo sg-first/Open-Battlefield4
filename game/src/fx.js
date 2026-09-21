@@ -6,12 +6,13 @@
 import * as THREE from 'three';
 import {
   makeGlowTexture, makeFlashTexture, makeSmokeTexture,
-  makeBulletHoleTexture, makeBloodTexture, clamp,
+  makeBulletHoleTexture, makeBloodTexture, clamp, smoothstep,
 } from './util.js';
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
 const _m4 = new THREE.Matrix4(), _quat = new THREE.Quaternion(), _eul = new THREE.Euler();
 const _pScale = new THREE.Vector3(1, 1, 1);
+const _pCol = new THREE.Color(1, 1, 1);
 
 export class FX {
   constructor(scene, camera, boxes) {
@@ -210,7 +211,170 @@ export class FX {
       if (this.paper.instanceColor) this.paper.instanceColor.needsUpdate = true;
     }
 
+    // ---- 燃烧点：浓烟柱 + 火光
+    // 烟团全部塞进一个 InstancedMesh（一趟画完），逐实例用 instanceColor 做"火源黑烟 → 高空灰白"的渐变；
+    // 因为没有逐实例透明度，消散靠"先膨胀后收缩"，配合较低的整体 opacity 与多层叠加效果。
+    this.fires = [];
+    this.fireMax = 16;
+    this.firePuffN = 60;         // 每个火点 60 个烟团：层距小于烟团直径，柱体才不会出现断层
+    const fireGeo = new THREE.PlaneGeometry(1, 1);
+    const puffCount = this.fireMax * this.firePuffN;
+    this.fireSmoke = new THREE.InstancedMesh(fireGeo, new THREE.MeshBasicMaterial({
+      map: this.texSmoke, transparent: true, depthWrite: false, opacity: 0.75, fog: true,
+    }), puffCount);
+    this.fireSmoke.frustumCulled = false;
+    this.fireSmoke.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.fireSmoke.renderOrder = 6;
+    this.fireSmoke.visible = false;
+    this.group.add(this.fireSmoke);
+
+    this.flameCount = 6;      // 每个火点的火舌精灵数
+    this.fireFlames = new THREE.InstancedMesh(fireGeo, new THREE.MeshBasicMaterial({
+      map: this.texGlow, transparent: true, blending: THREE.AdditiveBlending,
+      depthWrite: false, fog: false,
+    }), this.fireMax * this.flameCount);
+    this.fireFlames.frustumCulled = false;
+    this.fireFlames.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.fireFlames.renderOrder = 9;
+    this.fireFlames.visible = false;
+    this.group.add(this.fireFlames);
+
+    this.firePuffs = [];
+    for (let i = 0; i < puffCount; i++) {
+      this.firePuffs.push({
+        site: -1, age: 0, life: 1, size: 1, sway: 0,
+        pos: new THREE.Vector3(), vel: new THREE.Vector3(),
+      });
+      this.fireSmoke.setColorAt(i, _pCol.setScalar(0.2));
+    }
+    for (let i = 0; i < this.fireMax * this.flameCount; i++) this.fireFlames.setColorAt(i, _pCol.setScalar(0));
+    if (this.fireSmoke.instanceColor) this.fireSmoke.instanceColor.needsUpdate = true;
+    if (this.fireFlames.instanceColor) this.fireFlames.instanceColor.needsUpdate = true;
+    // 未启用的实例不参与绘制（否则会留在世界原点）
+    this.fireSmoke.count = 0;
+    this.fireFlames.count = 0;
+
+    this._windV = { x: 0, z: 0 };
     this.time = 0;
+  }
+
+  /* ---------------------------------------- 燃烧点 */
+  /** 在某处点一把火：又黑又浓的烟柱从 (x,y,z) 往上冒，底部有闪烁的火光精灵 */
+  addFire(x, y, z, scale = 1) {
+    if (this.fires.length >= this.fireMax) return null;
+    const idx = this.fires.length;
+    const site = { x, y, z, s: scale, seed: Math.random() * 100, flames: [] };
+    // 不给火点挂 PointLight：多一盏灯等于所有受光材质的片元着色器多跑一轮，
+    // "火光"改用叠加混合的火舌精灵来表现，零光照开销。
+    for (let k = 0; k < this.flameCount; k++) {
+      const a = (k / this.flameCount) * 6.28 + Math.random();
+      site.flames.push({
+        ox: Math.cos(a) * (1.2 + Math.random() * 2.2) * scale,
+        oz: Math.sin(a) * (1.2 + Math.random() * 2.2) * scale,
+        oy: (0.5 + Math.random() * 2.2) * scale,
+        ph: Math.random() * 6.28,
+        sp: 5 + Math.random() * 6,
+      });
+    }
+    this.fires.push(site);
+    const base = idx * this.firePuffN;
+    for (let k = 0; k < this.firePuffN; k++) {
+      const p = this.firePuffs[base + k];
+      p.site = idx;
+      this._respawnPuff(p, true);      // 预置成成熟状态，开场就是一根完整的烟柱
+    }
+    // 只绘制已启用的实例
+    this.fireSmoke.count = (idx + 1) * this.firePuffN;
+    this.fireFlames.count = (idx + 1) * this.flameCount;
+    return site;
+  }
+
+  _respawnPuff(p, mature = false) {
+    const site = this.fires[p.site];
+    const s = site.s;
+    // 寿命、上升速度、尺寸都收窄随机范围：烟团沿柱体分布均匀，
+    // 层距（上升速度 × 重生间隔）远小于烟团直径，黑色部分才连成一片。
+    p.life = (15 + Math.random() * 2.5) * (0.75 + 0.25 * s);
+    p.age = mature ? Math.random() * p.life * 0.9 : 0;
+    p.size = (12 + Math.random() * 6) * s;
+    p.sway = 0.4 + Math.random() * 0.6;
+    const r = 1.7 * s;                  // 火源处的横向散布收窄
+    p.pos.set(
+      site.x + (Math.random() - 0.5) * r,
+      site.y + Math.random() * 1.8 * s,
+      site.z + (Math.random() - 0.5) * r,
+    );
+    p.vel.set((Math.random() - 0.5) * 0.5 * s, (8.4 + Math.random() * 1.4) * s, (Math.random() - 0.5) * 0.5 * s);
+    if (mature) {                       // 按已有年龄把位置推到对应高度
+      p.pos.x += p.vel.x * p.age;
+      p.pos.y += p.vel.y * p.age;
+      p.pos.z += p.vel.z * p.age;
+    }
+  }
+
+  /** 与纸屑共用同一股风，烟柱和纸屑被同方向吹走 */
+  _wind() {
+    const t = this.time;
+    const gust = 1 + 0.45 * Math.sin(t * 1.9) + 0.25 * Math.sin(t * 3.7 + 0.6);
+    this._windV.x = (4.6 + 1.7 * Math.sin(t * 0.31) + 0.9 * Math.sin(t * 0.83)) * gust;
+    this._windV.z = (2.9 + 1.5 * Math.sin(t * 0.27 + 1.7) + 0.8 * Math.sin(t * 0.91 + 0.8)) * gust;
+    return this._windV;
+  }
+
+  _updateFires(dt) {
+    const n = this.fires.length;
+    if (!n) { if (this.fireSmoke.visible) { this.fireSmoke.visible = false; this.fireFlames.visible = false; } return; }
+    this.fireSmoke.visible = true;
+    this.fireFlames.visible = true;
+    const camQ = this.camera.quaternion;
+    const wind = this._wind();
+    const t = this.time;
+    const count = n * this.firePuffN;
+
+    for (let i = 0; i < count; i++) {
+      const p = this.firePuffs[i];
+      if (p.site < 0 || p.site >= n) { _pScale.setScalar(0.0001); _m4.compose(_v1.set(0, -9999, 0), camQ, _pScale); this.fireSmoke.setMatrixAt(i, _m4); continue; }
+      p.age += dt;
+      if (p.age >= p.life) this._respawnPuff(p);
+      const k = clamp(p.age / p.life, 0, 1);
+
+      // 柱体保持笔直：浮力衰减很慢，湍流幅度很小，风只在高处才把柱顶缓缓吹弯
+      p.vel.y -= 0.28 * dt;
+      const turb = Math.sin(t * 1.7 + p.sway * 9.1);
+      p.pos.x += (p.vel.x + wind.x * (0.05 + k * 0.35) + turb * p.sway * 0.22) * dt;
+      p.pos.y += p.vel.y * dt;
+      p.pos.z += (p.vel.z + wind.z * (0.05 + k * 0.35) + Math.cos(t * 1.3 + p.sway * 7.7) * p.sway * 0.22) * dt;
+
+      // 尺寸：前 1/5 迅速膨胀到最大，最后 15% 才收缩散去（柱体全程保持饱满）
+      const grow = 0.62 + 0.38 * Math.min(1, k / 0.2);
+      const fade = 1 - smoothstep(0.85, 1, k);
+      _pScale.setScalar(Math.max(0.05, p.size * grow * fade));
+      _m4.compose(_v1.copy(p.pos), camQ, _pScale);
+      this.fireSmoke.setMatrixAt(i, _m4);
+      // 颜色：整根柱子都是浓黑烟，只有柱顶将散时略微转灰
+      this.fireSmoke.setColorAt(i, _pCol.setScalar(0.025 + 0.16 * smoothstep(0.5, 1, k)));
+    }
+    this.fireSmoke.instanceMatrix.needsUpdate = true;
+    if (this.fireSmoke.instanceColor) this.fireSmoke.instanceColor.needsUpdate = true;
+
+    // 火舌：多组不同频率的正弦叠加出无规律闪烁（叠加混合，不产生任何光照开销）
+    let fi = 0;
+    for (const site of this.fires) {
+      for (let k = 0; k < this.flameCount; k++) {
+        const f = site.flames[k];
+        const w = Math.sin(t * f.sp + f.ph) * 0.5 + Math.sin(t * f.sp * 2.7 + f.ph * 1.7) * 0.3 + 0.5;
+        const flick = clamp(0.25 + w, 0, 1.3);
+        _v1.set(site.x + f.ox, site.y + f.oy + flick * 2.4 * site.s, site.z + f.oz);
+        _pScale.setScalar((2.4 + 4.6 * flick) * site.s);
+        _m4.compose(_v1, camQ, _pScale);
+        this.fireFlames.setMatrixAt(fi, _m4);
+        _pCol.setRGB(flick, 0.32 * flick + 0.05, 0.05 * flick * flick);
+        this.fireFlames.setColorAt(fi, _pCol);
+        fi++;
+      }
+    }
+    this.fireFlames.instanceMatrix.needsUpdate = true;
+    if (this.fireFlames.instanceColor) this.fireFlames.instanceColor.needsUpdate = true;
   }
 
   /* ---------------------------------------- 内部取值 */
@@ -574,6 +738,7 @@ export class FX {
     }
 
     this._updatePaper(dt);
+    this._updateFires(dt);
   }
 
   /* ---------------------------------------- 飞舞的纸屑 */
@@ -581,9 +746,8 @@ export class FX {
     const N = this.paperN, d = this.paperD, R = this.paperR, t = this.time;
     const cam = this.camera.position;
     // 疾风：主风 4~6m/s 并持续转向，叠加更猛的阵风，纸屑是"被卷着跑"而不是飘落
-    const gust = 1 + 0.45 * Math.sin(t * 1.9) + 0.25 * Math.sin(t * 3.7 + 0.6);
-    const windX = (4.6 + 1.7 * Math.sin(t * 0.31) + 0.9 * Math.sin(t * 0.83)) * gust;
-    const windZ = (2.9 + 1.5 * Math.sin(t * 0.27 + 1.7) + 0.8 * Math.sin(t * 0.91 + 0.8)) * gust;
+    const wind = this._wind();
+    const windX = wind.x, windZ = wind.z;
 
     for (let i = 0; i < N; i++) {
       const i3 = i * 3;

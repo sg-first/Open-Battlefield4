@@ -477,6 +477,7 @@ export function buildWorld(o) {
   const WHITE = () => new THREE.Color(1, 1, 1);
 
   const spawns = [];
+  const fires = [];              // 燃烧点（烟柱 + 火光），交给 FX 生成
   const plazaBlocks = [[0, 0]];
   const isPlaza = (i, j) => i === 0 && j === 0;
 
@@ -488,7 +489,18 @@ export function buildWorld(o) {
       const far = Math.max(Math.abs(i), Math.abs(j)) >= grid;
 
       // 主楼
-      buildTower(cx + rng.range(-8, 8), cz + rng.range(-8, 8), far, (i + j + 8) % 5);
+      const tx = cx + rng.range(-8, 8), tz = cz + rng.range(-8, 8);
+      const towerTop = buildTower(tx, tz, far, (i + j + 8) % 5);
+      // 部分楼顶着火：烟柱必须从楼体上方冒出来（横向偏移控制在楼面内），否则会变成悬空的烟
+      if (rng() < 0.24) {
+        const fa = rng() * 6.28, fd = rng.range(0, 5);
+        fires.push({
+          x: tx + Math.cos(fa) * fd,
+          y: Math.max(8, towerTop - 1.5),
+          z: tz + Math.sin(fa) * fd,
+          s: rng.range(0.85, 1.25),
+        });
+      }
       // 副楼 / 裙楼
       const n = rng.int(1, 2);
       for (let k = 0; k < n; k++) {
@@ -727,6 +739,9 @@ export function buildWorld(o) {
     // 广场上的坦克与直升机残骸（放在街区边缘）
     W.place('gameplay_vehicles_ch_mbt_type99_spec_ch_mbt_type99_sp_shanghaichase_mesh', plaza.x + 33, 0, plaza.z - 30, 0.7, { collide: true });
     W.place('gameplay_vehicles_ch_lthe_z-9_ch_lthe_z-9_wreck_mesh', plaza.x - 34, 0, plaza.z - 28, 2.1, { collide: true });
+    // 烧着的坦克与直升机残骸：广场地面上的火点，玩家在广场上就能看到黑烟冲上天
+    fires.push({ x: plaza.x + 33, y: 1.7, z: plaza.z - 30, s: 0.62 });
+    fires.push({ x: plaza.x - 34, y: 1.3, z: plaza.z - 28, s: 0.5 });
   }
 
   /* ---------------- 外滩滨水区 ---------------- */
@@ -810,7 +825,10 @@ export function buildWorld(o) {
         tiltX: rng.range(-0.05, 0.05),
         tiltZ: rng.range(-0.065, 0.065),
       });
+      // 每隔若干辆挑一辆还在烧的：街面上也立起直冲上天的黑烟柱
+      if (wreckN++ % 26 === 0 && fires.length < 14) fires.push({ x, y: 1.3, z, s: rng.range(0.6, 0.9) });
     };
+    let wreckN = 0;
     // 两条方向的车道都扫一遍：每 20~42m 一辆，横向位置覆盖整幅路面（偶尔蹭上路缘）
     for (const rc of roadCenters) {
       for (let s = cityMin + 12; s < cityMax - 8; s += rng.range(20, 42)) {
@@ -970,6 +988,7 @@ export function buildWorld(o) {
   S.water = water; S.waterNormal = waterNormal;
   S.spawn = spawn; S.spawnY = floorY;
   S.enemySpawns = enemySpawns; S.npcSpawns = npcSpawns;
+  S.fires = fires;
   S.extent = (grid + 1) * B;
   S.plaza = plaza;
   return S;
