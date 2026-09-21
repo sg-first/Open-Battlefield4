@@ -44,48 +44,88 @@ function grain(ctx, w, h, seed, amount, base) {
   ctx.putImageData(img, 0, 0);
 }
 
-function makeGlassFacade(size = 512, seed = 11) {
+function makeGlassFacade(size = 1024, seed = 11, variant = 0) {
   const c = makeCanvas(size, size);
   const g = c.getContext('2d');
-  g.fillStyle = '#2b333c';
+  const styles = [
+    { base: '#263b4c', hi: '#98d4ed', low: '#101a25', frame: '#b5c3c9', warm: '#e8c785' },
+    { base: '#4a4e52', hi: '#d7e0e1', low: '#171b20', frame: '#d2d4d1', warm: '#f0ca86' },
+    { base: '#30343c', hi: '#a4b6c8', low: '#11131a', frame: '#8d98a4', warm: '#d8b57b' },
+    { base: '#3e4145', hi: '#d7c9b6', low: '#17191d', frame: '#c8bda9', warm: '#ffd09a' },
+  ];
+  const st = styles[variant % styles.length];
+  g.fillStyle = st.base;
   g.fillRect(0, 0, size, size);
-  const rng = makeRNG(seed);
-  const cols = 8, rows = 8;
+  const rng = makeRNG(seed + variant * 101);
+  const cols = 12, rows = 16;
   const cw = size / cols, ch = size / rows;
+
   for (let r = 0; r < rows; r++) {
     for (let k = 0; k < cols; k++) {
-      const lit = rng() < 0.06;
-      const shade = 0.72 + rng() * 0.5;
+      const lit = rng() < 0.045 + (r % 5 === 0 ? 0.025 : 0);
+      const shade = 0.72 + rng() * 0.38;
+      const x = k * cw + 4, y = r * ch + 4;
+      const gd = g.createLinearGradient(x, y, x + cw, y + ch);
       if (lit) {
-        const gd = g.createLinearGradient(k * cw, r * ch, k * cw, (r + 1) * ch);
-        gd.addColorStop(0, 'rgba(226,196,150,0.85)');
-        gd.addColorStop(1, 'rgba(150,116,74,0.8)');
-        g.fillStyle = gd;
+        gd.addColorStop(0, st.warm);
+        gd.addColorStop(0.32, '#fff2cc');
+        gd.addColorStop(1, '#8f6843');
       } else {
-        const gd = g.createLinearGradient(k * cw, r * ch, (k + 1) * cw, (r + 1) * ch);
-        gd.addColorStop(0, `rgba(${Math.round(74 * shade)},${Math.round(90 * shade)},${Math.round(104 * shade)},1)`);
-        gd.addColorStop(0.55, `rgba(${Math.round(46 * shade)},${Math.round(58 * shade)},${Math.round(70 * shade)},1)`);
-        gd.addColorStop(1, `rgba(${Math.round(30 * shade)},${Math.round(38 * shade)},${Math.round(48 * shade)},1)`);
-        g.fillStyle = gd;
+        gd.addColorStop(0, st.hi);
+        gd.addColorStop(0.13, `rgba(175,218,239,${0.28 * shade})`);
+        gd.addColorStop(0.42, st.base);
+        gd.addColorStop(1, st.low);
       }
-      g.fillRect(k * cw + 2, r * ch + 2, cw - 4, ch - 4);
-      // 竖向反光
-      if (!lit && rng() < 0.3) {
-        g.fillStyle = 'rgba(190,215,235,0.10)';
-        g.fillRect(k * cw + 2, r * ch + 2, cw * 0.28, ch - 4);
+      g.fillStyle = gd;
+      g.fillRect(x, y, cw - 8, ch - 8);
+
+      // 不规则天空/城市反射条，打破平铺感
+      if (!lit && rng() < 0.55) {
+        g.fillStyle = `rgba(220,242,255,${0.05 + rng() * 0.12})`;
+        g.beginPath();
+        g.moveTo(x + cw * (0.08 + rng() * 0.2), y);
+        g.lineTo(x + cw * (0.24 + rng() * 0.25), y);
+        g.lineTo(x + cw * (0.63 + rng() * 0.18), y + ch);
+        g.lineTo(x + cw * (0.46 + rng() * 0.12), y + ch);
+        g.closePath(); g.fill();
       }
+      // 窗内竖向分隔，远看形成高密度办公窗格
+      g.fillStyle = 'rgba(8,13,19,.16)';
+      g.fillRect(x + (cw - 8) * 0.5 - 1, y, 2, ch - 8);
     }
   }
-  // 幕墙竖挺 / 横梁
-  g.strokeStyle = 'rgba(150,164,178,0.55)';
-  g.lineWidth = Math.max(1, size / 256);
-  for (let k = 0; k <= cols; k++) {
-    g.beginPath(); g.moveTo(k * cw, 0); g.lineTo(k * cw, size); g.stroke();
+
+  // 阳极氧化铝竖挺与楼层横梁
+  g.strokeStyle = st.frame;
+  g.globalAlpha = 0.72;
+  g.lineWidth = Math.max(2, size / 320);
+  for (let k = 0; k <= cols; k++) { g.beginPath(); g.moveTo(k * cw, 0); g.lineTo(k * cw, size); g.stroke(); }
+  g.globalAlpha = 0.50;
+  for (let r = 0; r <= rows; r++) { g.beginPath(); g.moveTo(0, r * ch); g.lineTo(size, r * ch); g.stroke(); }
+  g.globalAlpha = 1;
+  grain(g, size, size, seed + 5, 4);
+  return c;
+}
+
+function makeFacadeNormal(size = 512, variant = 0) {
+  const c = makeCanvas(size, size);
+  const g = c.getContext('2d');
+  const img = g.createImageData(size, size);
+  const cols = 12, rows = 16;
+  const cw = size / cols, ch = size / rows;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const fx = Math.min(x % cw, cw - (x % cw));
+      const fy = Math.min(y % ch, ch - (y % ch));
+      const frame = Math.min(fx, fy) < Math.max(1.8, size / 360);
+      const i = (y * size + x) * 4;
+      img.data[i] = 128;
+      img.data[i + 1] = frame ? 103 : 128;
+      img.data[i + 2] = frame ? 238 : 255;
+      img.data[i + 3] = 255;
+    }
   }
-  for (let r = 0; r <= rows; r++) {
-    g.beginPath(); g.moveTo(0, r * ch); g.lineTo(size, r * ch); g.stroke();
-  }
-  grain(g, size, size, seed + 5, 10);
+  g.putImageData(img, 0, 0);
   return c;
 }
 
@@ -208,23 +248,34 @@ const BUILDERS = {
 const texCache = new Map();
 const matCache = new Map();
 
-export function procTexture(kind) {
-  if (texCache.has(kind)) return texCache.get(kind);
-  const cfg = PROC[kind] || PROC.concrete;
-  const size = kind === 'glass' ? 512 : 512;
-  const c = (BUILDERS[kind] || makeConcrete)(size, 1000 + kind.length * 37);
+export function procTexture(kind, variant = 0) {
+  const key = `${kind}_${variant}`;
+  if (texCache.has(key)) return texCache.get(key);
+  const size = kind === 'glass' ? 1024 : 512;
+  const c = (BUILDERS[kind] || makeConcrete)(size, 1000 + kind.length * 37, variant);
   const t = new THREE.CanvasTexture(c);
+  t.name = `proc_${kind}_${variant}`;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.colorSpace = THREE.SRGBColorSpace;
   t.anisotropy = 8;
   t.needsUpdate = true;
-  texCache.set(kind, t);
+  texCache.set(key, t);
   return t;
 }
 
-export function procNormal(kind) {
-  const key = kind + '_n';
+export function procNormal(kind, variant = 0) {
+  const key = `${kind}_${variant}_n`;
   if (texCache.has(key)) return texCache.get(key);
+  if (kind === 'glass') {
+    const t = new THREE.CanvasTexture(makeFacadeNormal(512, variant));
+    t.name = `proc_${kind}_${variant}_n`;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.NoColorSpace;
+    t.anisotropy = 8;
+    t.needsUpdate = true;
+    texCache.set(key, t);
+    return t;
+  }
   const cfg = PROC[kind] || PROC.concrete;
   const strength = kind === 'brick' ? 3.0 : kind === 'metal' ? 1.6 : 2.2;
   const c = makeCanvas(256, 256);
@@ -255,16 +306,21 @@ export function procNormal(kind) {
 }
 
 export function procMaterial(kind, opts = {}) {
-  const key = kind + (opts.low ? '_low' : '');
+  const variant = opts.variant ?? 0;
+  const key = `${kind}_${variant}${opts.low ? '_low' : ''}`;
   if (matCache.has(key)) return matCache.get(key);
   const cfg = PROC[kind] || PROC.concrete;
-  const m = new THREE.MeshStandardMaterial({
-    map: procTexture(kind),
-    normalMap: opts.low ? null : procNormal(kind),
-    normalScale: new THREE.Vector2(0.6, 0.6),
+  const isGlass = kind === 'glass';
+  const m = new THREE.MeshPhysicalMaterial({
+    map: procTexture(kind, variant),
+    normalMap: opts.low ? null : procNormal(kind, variant),
+    normalScale: new THREE.Vector2(isGlass ? 0.42 : 0.6, isGlass ? 0.42 : 0.6),
     roughness: cfg.roughness,
     metalness: cfg.metalness,
     envMapIntensity: cfg.env,
+    clearcoat: isGlass ? 0.78 : 0.08,
+    clearcoatRoughness: isGlass ? 0.12 : 0.5,
+    reflectivity: isGlass ? 0.72 : 0.5,
     vertexColors: true,
     side: opts.side ?? THREE.FrontSide,
     fog: opts.fog !== false,

@@ -399,20 +399,24 @@ export async function makeMaterial(tex, ref, opt = {}) {
   if (opt.loadNormal && src.Bump) normalMap = await tex.get(src.Bump, { srgb: false, maxSize });
 
   const nm = (src.Kd || '') + ' ' + (src.Bump || '') + ' ' + (opt.tag || '');
-  const isGlass = /glass|window/i.test(nm) && !/broken|destr/i.test(nm);
-
-  const mat = new THREE.MeshStandardMaterial({
+  const reflectiveFacade = /glass|window|facade|skyscraper/i.test(nm) && !/broken|destr/i.test(nm);
+  const transparentGlass = /glass|window/i.test(nm) && !/broken|destr/i.test(nm);
+  const usePhysical = reflectiveFacade || opt.preset === 'building' || opt.preset === 'vehicle';
+  const Material = usePhysical ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
+  const mat = new Material({
     map,
     normalMap,
-    roughness: preset.roughness,
-    metalness: preset.metalness,
-    envMapIntensity: preset.env,
+    roughness: reflectiveFacade ? Math.min(preset.roughness, 0.34) : preset.roughness,
+    metalness: reflectiveFacade ? Math.max(preset.metalness, 0.16) : preset.metalness,
+    envMapIntensity: reflectiveFacade ? Math.max(preset.env, 1.25) : preset.env,
+    clearcoat: usePhysical ? (reflectiveFacade ? 0.76 : 0.18) : 0,
+    clearcoatRoughness: reflectiveFacade ? 0.14 : 0.48,
     side: opt.side ?? THREE.FrontSide,
     fog: opt.fog !== false,
   });
   if (normalMap) mat.normalScale.set(opt.normalScale ?? 1, opt.normalScale ?? 1);
 
-  if (isGlass && opt.glass !== false) {
+  if (transparentGlass && opt.glass !== false) {
     mat.transparent = true;
     mat.opacity = 0.40;
     mat.roughness = 0.06;
@@ -495,8 +499,12 @@ export async function loadAsset(tex, name, opt = {}) {
       // 缺少材质 / 贴图是调试色块：重新投影 UV 并套用程序化材质
       const kind = pickMatKind(name);
       if (!hasValidUV(geometry)) boxProjectUV(geometry, PROC[kind].scale, hashName(name));
-      paintVertexColor(geometry, hashName(name) % 9973, { grime: true });
-      material = procMaterial(kind, { low: !!opt.procLow });
+      paintVertexColor(geometry, hashName(name) % 9973,
+        kind === 'glass' ? { tint: 0xd7e7ee } : { grime: true });
+      material = procMaterial(kind, {
+        low: !!opt.procLow,
+        variant: hashName(name) % 4,
+      });
     }
     parts.push({ geometry, material });
   }

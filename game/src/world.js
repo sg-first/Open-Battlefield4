@@ -49,6 +49,43 @@ export function sunDirAt(hour) {
   return new THREE.Vector3(-Math.cos(ang) * 0.86, Math.sin(ang), 0.42).normalize();
 }
 
+/* ---------------------------------------------------------- 环境反射 */
+function envFace(top, horizon, bottom, side) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, top); grad.addColorStop(0.48, horizon); grad.addColorStop(1, bottom);
+  g.fillStyle = grad; g.fillRect(0, 0, 256, 256);
+  // 模糊城市轮廓进入反射，避免玻璃只映出纯色天空
+  if (side) {
+    g.fillStyle = 'rgba(24,32,42,.55)';
+    let x = 0;
+    while (x < 256) {
+      const w = 9 + ((x * 17) % 26), h = 30 + ((x * 31) % 96);
+      g.fillRect(x, 165 - h, w, h);
+      x += w + 2;
+    }
+    g.fillStyle = 'rgba(255,230,186,.14)';
+    for (let i = 0; i < 26; i++) g.fillRect((i * 47) % 250, 92 + (i * 29) % 70, 2, 2);
+  }
+  return c;
+}
+
+function makeCityEnvironment() {
+  const tex = new THREE.CubeTexture([
+    envFace('#80b7df', '#d8e4e8', '#364656', true),
+    envFace('#80b7df', '#d8e4e8', '#364656', true),
+    envFace('#a6cbed', '#dcebf5', '#7e97a8', false),
+    envFace('#43586d', '#657789', '#27323e', false),
+    envFace('#79afd6', '#d8e4e8', '#364656', true),
+    envFace('#79afd6', '#d8e4e8', '#364656', true),
+  ]);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 /* ---------------------------------------------------------- 主入口 */
 export function buildWorld(o) {
   const scene = o.scene;
@@ -58,14 +95,26 @@ export function buildWorld(o) {
 
   const S = {};
 
+  // 为玻璃、抛光金属与车辆提供预过滤的城市/天空反射；
+  // PMREM 让粗糙度能正确影响反射模糊度，立面不会像镜子贴纸。
+  const envSource = makeCityEnvironment();
+  const pmrem = new THREE.PMREMGenerator(o.renderer);
+  pmrem.compileCubemapShader();
+  const envRT = pmrem.fromCubemap(envSource);
+  envSource.dispose();
+  pmrem.dispose();
+  scene.environment = envRT.texture;
+  scene.environmentIntensity = 1.0;
+  S.environment = envRT;
+
   /* ---------------- 光照与天空 ---------------- */
   const sun = new THREE.DirectionalLight(0xffffff, 2.6);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.mapSize.set(4096, 4096);
   sun.shadow.camera.near = 1;
-  sun.shadow.camera.far = 320;
-  sun.shadow.camera.left = -62; sun.shadow.camera.right = 62;
-  sun.shadow.camera.top = 62; sun.shadow.camera.bottom = -62;
+  sun.shadow.camera.far = 420;
+  sun.shadow.camera.left = -84; sun.shadow.camera.right = 84;
+  sun.shadow.camera.top = 84; sun.shadow.camera.bottom = -84;
   sun.shadow.bias = -0.0006;
   sun.shadow.normalBias = 0.55;
   scene.add(sun, sun.target);
@@ -79,6 +128,7 @@ export function buildWorld(o) {
     top: { value: new THREE.Color('#255fa8') }, mid: { value: new THREE.Color('#9dc0e6') },
     bot: { value: new THREE.Color('#e8dcc4') }, sunCol: { value: new THREE.Color('#fff0cf') },
     sunDir: { value: new THREE.Vector3(0, 1, 0) }, sunI: { value: 1 }, haze: { value: 0.5 },
+    cloudTime: { value: new THREE.Vector2(0, 0) },
   };
   const skyMat = new THREE.ShaderMaterial({
     uniforms: skyU, side: THREE.BackSide, depthWrite: false, fog: false,
@@ -88,12 +138,30 @@ export function buildWorld(o) {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
     fragmentShader: `
       uniform vec3 top, mid, bot, sunCol, sunDir; uniform float sunI, haze;
+      uniform vec2 cloudTime;
       varying vec3 vDir;
+      float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+      float noise2(vec2 p) {
+        vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+        return mix(mix(hash21(i), hash21(i+vec2(1,0)), f.x),
+                   mix(hash21(i+vec2(0,1)), hash21(i+vec2(1,1)), f.x), f.y);
+      }
+      float fbm(vec2 p) {
+        float v = 0.0, a = 0.55;
+        for (int i=0; i<4; i++) { v += noise2(p)*a; p = p*2.02+7.3; a *= 0.5; }
+        return v;
+      }
       void main(){
         vec3 d = normalize(vDir);
         float h = clamp(d.y*0.5+0.5, 0.0, 1.0);
         vec3 c = mix(bot, mid, smoothstep(0.40,0.545,h));
         c = mix(c, top, smoothstep(0.52,0.95,h));
+        // 多尺度云层：只出现在地平线以上，亮度随日照变化。
+        vec2 cuv = d.xz / max(0.18, d.y + 0.33) * 1.35 + cloudTime;
+        float cl = fbm(cuv * 0.85) * 0.72 + fbm(cuv * 2.3 + 18.0) * 0.28;
+        float cloud = smoothstep(0.48, 0.68, cl) * smoothstep(-0.02, 0.20, d.y) * (1.0-smoothstep(0.20, 0.98, d.y));
+        vec3 cloudCol = mix(vec3(0.55,0.62,0.70), vec3(1.0,0.98,0.92), clamp(sunDir.y*1.4,0.0,1.0));
+        c = mix(c, cloudCol, cloud * (0.30 + sunI * 0.18));
         float sd = max(dot(d, normalize(sunDir)), 0.0);
         c += sunCol * pow(sd, 900.0) * 6.0 * sunI;
         c += sunCol * pow(sd, 12.0) * 0.30 * sunI;
@@ -183,6 +251,43 @@ export function buildWorld(o) {
     }
   }
 
+  /* ---------------- 交通标线：额外近景微细节，避免道路成为大块纯贴图 ---------------- */
+  const markMat = new THREE.MeshStandardMaterial({
+    color: 0xe8e5d8, roughness: 0.68, metalness: 0.02, depthWrite: false,
+  });
+  const dashV = new THREE.PlaneGeometry(0.18, 4.2).rotateX(-Math.PI / 2);
+  const dashH = new THREE.PlaneGeometry(4.2, 0.18).rotateX(-Math.PI / 2);
+  const vMarks = [], hMarks = [];
+  for (const x of roadCenters) {
+    for (let z = cityMin + 8; z < cityMax; z += 11) vMarks.push([x, z]);
+  }
+  for (const z of roadCenters) {
+    for (let x = cityMin + 8; x < cityMax; x += 11) hMarks.push([x, z]);
+  }
+  const makeMarks = (geo, rows) => {
+    const im = new THREE.InstancedMesh(geo, markMat, rows.length);
+    const m = new THREE.Matrix4();
+    rows.forEach(([x, z], i) => { m.makeTranslation(x, 0.046, z); im.setMatrixAt(i, m); });
+    im.instanceMatrix.needsUpdate = true;
+    im.renderOrder = 1;
+    scene.add(im);
+  };
+  makeMarks(dashV, vMarks);
+  makeMarks(dashH, hMarks);
+  // 路口斑马线（每个中央交叉口）
+  const zebraGeo = new THREE.PlaneGeometry(1.35, 5.3).rotateX(-Math.PI / 2);
+  const zebra = [];
+  for (const x of roadCenters) for (const z of roadCenters) {
+    for (let q = -3; q <= 3; q++) zebra.push([x + q * 1.8, z - 10.4, 0]);
+    for (let q = -3; q <= 3; q++) zebra.push([x - 10.4, z + q * 1.8, Math.PI / 2]);
+  }
+  const zi = new THREE.InstancedMesh(zebraGeo, markMat, zebra.length);
+  const zm = new THREE.Matrix4(), zq = new THREE.Quaternion();
+  zebra.forEach(([x, z, rot], i) => { zq.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rot); zm.compose(new THREE.Vector3(x, 0.047, z), zq, new THREE.Vector3(1, 1, 1)); zi.setMatrixAt(i, zm); });
+  zi.instanceMatrix.needsUpdate = true;
+  zi.renderOrder = 1;
+  scene.add(zi);
+
   /* ---------------- 人行道 ---------------- */
   const swTile = 'objects_architecture_sidewalk_set_01_sidewalk_01_s512x512_mesh';
   const swCorner = 'objects_architecture_sidewalk_set_01_sidewalk_01_c512_large_mesh';
@@ -205,6 +310,34 @@ export function buildWorld(o) {
       }
     }
   }
+
+  /* ---------------- 夜景灯光 / 近景层次 ---------------- */
+  const cityLights = [];
+  const lampMat = new THREE.MeshBasicMaterial({ color: 0x1e242a, toneMapped: false });
+  const lampGeo = new THREE.SphereGeometry(0.095, 8, 6);
+  const addLamp = (x, z, h = 5.4, color = 0xffd6a0) => {
+    const bulb = new THREE.Mesh(lampGeo, lampMat);
+    bulb.position.set(x, h, z);
+    bulb.frustumCulled = false;
+    const light = new THREE.PointLight(color, 0, 18, 2.1);
+    light.position.copy(bulb.position);
+    scene.add(bulb, light);
+    cityLights.push({ light, bulb, base: 2.4 + rng() * 1.4, color: new THREE.Color(color) });
+  };
+  // 在中心街区的交叉口和人行道布置暖色钠灯，与玻璃反射/后期高光共同形成夜景深度。
+  for (const x of roadCenters) {
+    if (Math.abs(x) > 60) continue; // 灯光预算集中在可游玩的中心城区
+    for (let z = -210; z <= 210; z += 46) {
+      addLamp(x - 9.5, z, 6.4, 0xffd4a0);
+      addLamp(x + 9.5, z + 18, 6.4, 0xffc77d);
+    }
+  }
+  for (const z of roadCenters) {
+    if (Math.abs(z) > 60) continue;
+    for (let x = -210; x <= 210; x += 58) addLamp(x, z - 9.5, 6.1, 0xffd6a2);
+  }
+  S.cityLights = cityLights;
+  S.lampMat = lampMat;
 
   /* ---------------- 建筑 ---------------- */
   const KITS = {
@@ -470,6 +603,10 @@ export function buildWorld(o) {
     // 水上摩天楼与发光地标
     W.place('levels_mp_mp_siege_architecture_mp_siege_skyscraperwaterfront_mp_siege_skyscraperwaterfront_mesh', qx + 62, 0, -120, 0.4, { collide: true });
     W.place('levels_sp_sp_shanghai_objects_bd_building_emissive_01_mesh', qx + 74, 0, 96, 0.2, { collide: true });
+    // 远处地标塔：提供参考图那种近景仰视的高密度玻璃天际线层次
+    W.place('levels_sp_sp_shanghai_objects_shanghaitower_01_shanghaitower_01_mesh', qx + 162, 0, -165, -0.18, { collide: false, scale: 0.48 });
+    W.place('objects_architecture_hk_skyscraper_05_hk_skyscraper_05_v2_backdrop_mesh', qx + 110, 0, -52, 0.26, { collide: true, scale: 0.88 });
+    W.place('objects_architecture_skyscraper_waterfront_02_skyscraper_waterfront_02_backdrop_mesh', qx + 172, 0, 76, -0.45, { collide: true, scale: 1.05 });
     W.place('levels_sp_sp_shanghai_objects_sp_shanghai_skyscraper_entrance_sp_shanghai_skyscraper_entrance_mesh', qx + 54, 0, 20, Math.PI / 2, { collide: true });
     W.place('levels_sp_sp_shanghai_objects_sp_shanghai_roadsign_big_01_sp_shanghai_roadsign_big_01_mesh', qx + 40, 0, -20, -0.3, { collide: true });
   }

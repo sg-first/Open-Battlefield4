@@ -73,6 +73,8 @@ export const GROUPS = {
       A('objects_architecture_hk_skyscraper_02_hk_skyscraper_bottom_02_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true }),
       A('objects_architecture_hk_skyscraper_02_hk_skyscraper_roof_02_mesh', { preset: 'building', maxSize: 512, collide: true }),
       A('objects_architecture_hk_skyscraper_03_hk_skyscraper_03_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, night: 0.8 }),
+      A('objects_architecture_hk_skyscraper_05_hk_skyscraper_05_v2_backdrop_mesh', { preset: 'building', maxSize: 1024, normal: true, collide: true, mode: 'solo', night: 1.1 }),
+      A('objects_architecture_skyscraper_waterfront_02_skyscraper_waterfront_02_backdrop_mesh', { preset: 'building', maxSize: 1024, normal: true, collide: true, mode: 'solo', night: 0.9 }),
       A('objects_architecture_hk_skyscraper_03_hk_skyscraper_bottom_03_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true }),
       A('objects_architecture_skyscraper_waterfront_01_skyscraperwaterfront_01_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, night: 0.75 }),
       A('objects_architecture_skyscraper_waterfront_01_skyscraperwaterfront_roof_01_mesh', { preset: 'building', maxSize: 512, collide: true }),
@@ -82,7 +84,8 @@ export const GROUPS = {
       A('levels_mp_mp_siege_architecture_mp_siege_office_lshape_01_mp_siege_office_lshape_highrise_02_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, mode: 'solo', night: 0.8 }),
       A('objects_architecture_ch_residentialbuilding_01_ch_residentialbuilding_01_merged_sp_shanghai_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, mode: 'solo', night: 0.9 }),
       A('objects_architecture_datacenter_02_animation_datacenter_02_animation_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, mode: 'solo', night: 0.5 }),
-      A('levels_sp_sp_shanghai_objects_bd_building_emissive_01_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, mode: 'solo', night: 1.6 }),
+      A('levels_sp_sp_shanghai_objects_bd_building_emissive_01_mesh', { preset: 'building', maxSize: 1024, normal: true, collide: true, mode: 'solo', night: 1.6 }),
+      A('levels_sp_sp_shanghai_objects_shanghaitower_01_shanghaitower_01_mesh', { preset: 'building', maxSize: 1024, normal: true, collide: true, mode: 'solo', night: 1.4 }),
       A('levels_sp_sp_shanghai_objects_architecture_shanghaihotel_shanghaihotel_floorlobbymerged_01_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, mode: 'solo' }),
       A('levels_sp_sp_shanghai_objects_architecture_shanghaihotelstaircase_01_shanghaihotelstaircase_01_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, mode: 'solo' }),
       A('levels_sp_sp_shanghai_objects_sp_shanghai_skyscraper_entrance_sp_shanghai_skyscraper_entrance_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, mode: 'solo' }),
@@ -223,8 +226,8 @@ export async function loadAll(tex, onProgress) {
     const jobs = grp.items.map((it) => (async () => {
       const opt = {
         preset: it.preset,
-        // 建筑外墙保留窗格细节，其余按清单配置
-        maxSize: it.maxSize || 512,
+        // 近景建筑使用 1024 边长以保住立面窗格；角色/小物维持清单尺寸。
+        maxSize: it.preset === 'building' ? Math.max(it.maxSize || 512, 1024) : (it.maxSize || 512),
         loadNormal: !!it.normal,
         pivot: it.pivot || 'base',
         side: it.side,

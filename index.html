@@ -1283,9 +1283,7 @@ document.getElementById('dir').onchange=e=>{
   setHud('目录已加载：obj='+F.obj.size+' mtl='+F.mtl.size+' tex='+F.tex.size);
 };
 
-fetch('viewer_manifest.json').then(r=>{if(!r.ok)throw 0}).catch(()=>{
-  MODE='file';document.getElementById('pick').style.display='flex';
-});
+if(location.protocol==='file:'){MODE='file';document.getElementById('pick').style.display='flex';}
 buildList();
 (function loop(){requestAnimationFrame(loop);ctrl.update();renderer.render(scene,camera)})();
 </script></body></html>

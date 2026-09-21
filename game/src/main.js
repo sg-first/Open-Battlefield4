@@ -13,19 +13,21 @@ import { WeaponSystem, WEAPON_DEFS } from './weapons.js';
 import { CharacterFactory } from './characters.js';
 import { EnemyManager } from './enemies.js';
 import { buildWorld, Civilians, skyStateAt, sunDirAt, CITY } from './world.js';
+import { PostFX } from './post.js';
 import { clamp, smoothstep, yieldFrame } from './util.js';
 
 const $ = (id) => document.getElementById(id);
 
 /* ---------------------------------------------------------- 渲染器 */
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.autoUpdate = true;
 renderer.autoClear = false;
 $('app').appendChild(renderer.domElement);
 
@@ -53,7 +55,7 @@ const state = {
   paused: false,
 };
 
-let audio, hud, player, weapons, enemies, civilians, fx, boxes, worldInfo, glowMats = [], bgMats = [];
+let audio, hud, player, weapons, enemies, civilians, fx, boxes, worldInfo, post, glowMats = [], bgMats = [];
 
 async function boot() {
   const tex = new TexCache(Math.min(8, renderer.capabilities.getMaxAnisotropy()));
@@ -69,13 +71,14 @@ async function boot() {
 
   boxes = new BoxWorld();
   const builder = new WorldBuilder(scene, assets, boxes);
-  worldInfo = buildWorld({ scene, assets, builder });
+  worldInfo = buildWorld({ scene, assets, builder, renderer });
   const stats = builder.build();
   boxes.finalize();
   setProgress(0.93, '生成角色与战斗系统…');
   await yieldFrame();
 
   // 系统
+  post = new PostFX(renderer);
   audio = new GameAudio();
   fx = new FX(scene, camera, boxes);
   hud = new HUD({ camera, boxes, extent: worldInfo.extent * 1.05 });
@@ -124,11 +127,10 @@ async function boot() {
   window.__THREE = THREE;
   window.__game = {
     scene, camera, renderer, player, weapons, enemies, civilians, boxes, worldInfo, stats,
-    builder, tex, state, hud,
+    builder, tex, state, hud, post,
     setClock: (h) => { state.clock = h; },
     render: () => {
-      renderer.clear();
-      renderer.render(scene, camera);
+      post.render(scene, camera);
       renderer.clearDepth();
       renderer.render(weapons.vmScene, weapons.vmCamera);
     },
@@ -199,6 +201,7 @@ onresize = () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  if (post) post.resize(innerWidth, innerHeight, renderer.getPixelRatio());
   if (weapons) weapons.setViewport(innerWidth / innerHeight, camera.fov);
 };
 renderer.domElement.addEventListener('click', () => {
@@ -276,6 +279,8 @@ function updateSky(dt) {
   U.top.value.set(st.top); U.mid.value.set(st.mid); U.bot.value.set(st.bot);
   U.sunCol.value.set(st.sun); U.sunDir.value.copy(dir);
   U.sunI.value = 1;
+  U.cloudTime.value.x += dt * 0.0014;
+  U.cloudTime.value.y += dt * 0.00045;
 
   const sun = worldInfo.sun;
   sun.position.copy(dir).multiplyScalar(260).add(player.pos);
@@ -294,6 +299,15 @@ function updateSky(dt) {
     window.__glowNight = night;
     for (const m of glowMats) m.emissiveIntensity = night * 1.5 * (m.userData.glow || 1);
   }
+  post && post.setNight(night);
+  scene.environmentIntensity = 0.82 + (1 - night) * 0.22;
+  if (worldInfo.cityLights) {
+    for (const it of worldInfo.cityLights) {
+      it.light.intensity = night * it.base;
+      it.bulb.material.color.copy(it.color).multiplyScalar(0.08 + night * 1.45);
+    }
+  }
+
   // 远景建筑融入雾色
   const haze = new THREE.Color(st.bot).lerp(new THREE.Color(st.mid), 0.35);
   for (const m of bgMats) m.color.copy(haze).lerp(new THREE.Color(0xffffff), 0.45);
@@ -315,8 +329,8 @@ function frame() {
   tSec += dt;
 
   if (!started) {
-    renderer.clear();
-    renderer.render(scene, camera);
+    if (post) post.render(scene, camera);
+    else { renderer.clear(); renderer.render(scene, camera); }
     return;
   }
 
@@ -363,9 +377,8 @@ function frame() {
     fps, clock: state.clock, ads: weapons.adsActive,
   });
 
-  // ---- 渲染：世界 → 手持模型
-  renderer.clear();
-  renderer.render(scene, camera);
+  // ---- 渲染：世界后期合成 → 清深度 → 清晰的第一人称武器层
+  post.render(scene, camera);
   renderer.clearDepth();
   renderer.render(weapons.vmScene, weapons.vmCamera);
 }
