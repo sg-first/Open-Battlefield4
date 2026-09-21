@@ -10,6 +10,8 @@ import {
 } from './util.js';
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const _m4 = new THREE.Matrix4(), _quat = new THREE.Quaternion(), _eul = new THREE.Euler();
+const _pScale = new THREE.Vector3(1, 1, 1);
 
 export class FX {
   constructor(scene, camera, boxes) {
@@ -145,6 +147,67 @@ export class FX {
       flash.visible = false; flash.frustumCulled = false; flash.renderOrder = 21;
       this.group.add(flash);
       this.booms.push({ light, flash, life: 0, max: 0.7 });
+    }
+
+    // ---- 飞舞的纸屑（战场氛围）
+    // 一小撮围绕相机循环的纸片：随风飘、边落边翻滚，出界就从另一侧绕回来，
+    // 因此不需要重新生成，也不会跑出视野范围。
+    this.paperN = 340;
+    this.paperR = { x: 36, z: 36, y0: -2.5, y1: 24 };
+    this.paper = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(0.20, 0.28),
+      new THREE.MeshLambertMaterial({
+        side: THREE.DoubleSide, fog: true,
+        emissive: 0x1b1915,          // 夜里也能看见一点点轮廓
+      }),
+      this.paperN,
+    );
+    this.paper.frustumCulled = false;
+    this.paper.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.paper.renderOrder = 5;
+    this.group.add(this.paper);
+    this.paperD = {
+      pos: new Float32Array(this.paperN * 3),
+      fall: new Float32Array(this.paperN),
+      rot: new Float32Array(this.paperN * 3),
+      spin: new Float32Array(this.paperN * 3),
+      phase: new Float32Array(this.paperN),
+      sway: new Float32Array(this.paperN),
+      scale: new Float32Array(this.paperN),
+    };
+    {
+      const d = this.paperD, c = new THREE.Color();
+      const inks = [
+        [0.88, 0.86, 0.79],   // 复印纸
+        [0.78, 0.74, 0.66],   // 旧报纸
+        [0.72, 0.62, 0.47],   // 牛皮纸
+        [0.60, 0.60, 0.58],   // 灰纸
+        [0.40, 0.36, 0.33],   // 烧焦的边角
+      ];
+      for (let i = 0; i < this.paperN; i++) {
+        const i3 = i * 3;
+        d.pos[i3] = (Math.random() - 0.5) * this.paperR.x * 2;
+        d.pos[i3 + 1] = this.paperR.y0 + Math.random() * (this.paperR.y1 - this.paperR.y0);
+        d.pos[i3 + 2] = (Math.random() - 0.5) * this.paperR.z * 2;
+        // 大部分被风裹着走，约两成被上升气流托着往上翻（整体比"安静飘落"快得多）
+        d.fall[i] = Math.random() < 0.22
+          ? 0.9 + Math.random() * 1.7
+          : -(1.4 + Math.random() * 1.9);
+        d.rot[i3] = Math.random() * 6.28;
+        d.rot[i3 + 1] = Math.random() * 6.28;
+        d.rot[i3 + 2] = Math.random() * 6.28;
+        d.spin[i3] = (Math.random() - 0.5) * 11.0;
+        d.spin[i3 + 1] = (Math.random() - 0.5) * 13.0;
+        d.spin[i3 + 2] = (Math.random() - 0.5) * 9.0;
+        d.phase[i] = Math.random() * 6.28;
+        d.sway[i] = 1.4 + Math.random() * 2.2;
+        d.scale[i] = 0.7 + Math.random() * 0.9;
+        const u = Math.random();
+        const ink = u < 0.45 ? inks[0] : u < 0.62 ? inks[1] : u < 0.75 ? inks[2] : u < 0.9 ? inks[3] : inks[4];
+        c.setRGB(ink[0], ink[1], ink[2]);
+        this.paper.setColorAt(i, c);
+      }
+      if (this.paper.instanceColor) this.paper.instanceColor.needsUpdate = true;
     }
 
     this.time = 0;
@@ -509,5 +572,47 @@ export class FX {
       b.flash.material.opacity = Math.max(0, 1 - k * 2.6);
       if (b.life <= 0) { b.flash.visible = false; b.light.visible = false; b.light.intensity = 0; }
     }
+
+    this._updatePaper(dt);
+  }
+
+  /* ---------------------------------------- 飞舞的纸屑 */
+  _updatePaper(dt) {
+    const N = this.paperN, d = this.paperD, R = this.paperR, t = this.time;
+    const cam = this.camera.position;
+    // 疾风：主风 4~6m/s 并持续转向，叠加更猛的阵风，纸屑是"被卷着跑"而不是飘落
+    const gust = 1 + 0.45 * Math.sin(t * 1.9) + 0.25 * Math.sin(t * 3.7 + 0.6);
+    const windX = (4.6 + 1.7 * Math.sin(t * 0.31) + 0.9 * Math.sin(t * 0.83)) * gust;
+    const windZ = (2.9 + 1.5 * Math.sin(t * 0.27 + 1.7) + 0.8 * Math.sin(t * 0.91 + 0.8)) * gust;
+
+    for (let i = 0; i < N; i++) {
+      const i3 = i * 3;
+      const ph = d.phase[i] + t * (2.6 + (i % 7) * 0.38);
+      // 纸片特有的飘摆：横向来回摆 + 上下抖，叠加在主风上
+      d.pos[i3] += (windX + Math.sin(ph) * d.sway[i]) * dt;
+      d.pos[i3 + 1] += (d.fall[i] + Math.sin(ph * 1.7) * 0.9) * dt;
+      d.pos[i3 + 2] += (windZ + Math.cos(ph * 0.83 + 1.3) * d.sway[i]) * dt;
+
+      // 以相机为中心的环形循环：出了包围盒就从另一侧绕回来
+      if (d.pos[i3] > R.x) d.pos[i3] -= R.x * 2;
+      else if (d.pos[i3] < -R.x) d.pos[i3] += R.x * 2;
+      if (d.pos[i3 + 2] > R.z) d.pos[i3 + 2] -= R.z * 2;
+      else if (d.pos[i3 + 2] < -R.z) d.pos[i3 + 2] += R.z * 2;
+      if (d.pos[i3 + 1] > R.y1) d.pos[i3 + 1] = R.y0 + (d.pos[i3 + 1] - R.y1);
+      else if (d.pos[i3 + 1] < R.y0) d.pos[i3 + 1] = R.y1 - (R.y0 - d.pos[i3 + 1]);
+
+      // 三轴翻滚，纸片才会"翻面"
+      d.rot[i3] += d.spin[i3] * dt;
+      d.rot[i3 + 1] += d.spin[i3 + 1] * dt;
+      d.rot[i3 + 2] += d.spin[i3 + 2] * dt;
+
+      _v1.set(cam.x + d.pos[i3], cam.y + d.pos[i3 + 1], cam.z + d.pos[i3 + 2]);
+      _eul.set(d.rot[i3], d.rot[i3 + 1], d.rot[i3 + 2]);
+      _quat.setFromEuler(_eul);
+      _pScale.setScalar(d.scale[i]);
+      _m4.compose(_v1, _quat, _pScale);
+      this.paper.setMatrixAt(i, _m4);
+    }
+    this.paper.instanceMatrix.needsUpdate = true;
   }
 }
