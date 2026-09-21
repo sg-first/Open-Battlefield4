@@ -137,9 +137,7 @@ async function boot() {
     inspect: () => inspectForward(false),
     lastInspect: () => lastInspect,
     render: () => {
-      post.render(scene, camera);
-      renderer.clearDepth();
-      renderer.render(weapons.vmScene, weapons.vmCamera);
+      post.render(scene, camera, weapons.vmScene, weapons.vmCamera);
     },
   };
   console.log('[上海] 实例', stats.instances, '网格', stats.meshes, '三角面', stats.tris,
@@ -356,6 +354,8 @@ function updateSky(dt) {
     for (const m of glowMats) m.emissiveIntensity = night * 1.5 * (m.userData.glow || 1);
   }
   post && post.setNight(night);
+  // 曝光由后期链自己做（渲染到离屏目标时 renderer 的 toneMapping/曝光不生效）
+  post && post.setExposure(st.exp);
   scene.environmentIntensity = 0.82 + (1 - night) * 0.22;
   if (worldInfo.cityLights) {
     for (const it of worldInfo.cityLights) {
@@ -433,10 +433,8 @@ function frame() {
     fps, clock: state.clock, ads: weapons.adsActive,
   });
 
-  // ---- 渲染：世界后期合成 → 清深度 → 清晰的第一人称武器层
-  post.render(scene, camera);
-  renderer.clearDepth();
-  renderer.render(weapons.vmScene, weapons.vmCamera);
+  // ---- 渲染：世界 + 第一人称武器一起进线性 HDR，再走完整后期链
+  post.render(scene, camera, weapons.vmScene, weapons.vmCamera);
 }
 
 /* ---------------------------------------------------------- 启动 */
