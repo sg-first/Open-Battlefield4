@@ -74,7 +74,10 @@ export const GROUPS = {
       A('objects_architecture_hk_skyscraper_02_hk_skyscraper_bottom_02_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true }),
       A('objects_architecture_hk_skyscraper_02_hk_skyscraper_roof_02_mesh', { preset: 'building', maxSize: 512, collide: true }),
       A('objects_architecture_hk_skyscraper_03_hk_skyscraper_03_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, night: 0.8 }),
-      A('objects_architecture_hk_skyscraper_05_hk_skyscraper_05_v2_backdrop_mesh', { preset: 'building', maxSize: 1024, normal: true, collide: true, mode: 'solo', night: 1.1 }),
+      // glass:false —— 立面贴图叫 t_window，会命中透明玻璃启发式，
+      // 但这是一整栋地标塔楼，不能做成半透明（会整栋不写深度、被后面几何穿透）。
+      // 关掉透明后仍保留 reflectiveFacade 的幕墙反射。
+      A('objects_architecture_hk_skyscraper_05_hk_skyscraper_05_v2_backdrop_mesh', { preset: 'building', maxSize: 1024, normal: true, collide: true, mode: 'solo', night: 1.1, glass: false }),
       A('objects_architecture_skyscraper_waterfront_02_skyscraper_waterfront_02_backdrop_mesh', { preset: 'building', maxSize: 1024, normal: true, collide: true, mode: 'solo', night: 0.9 }),
       A('objects_architecture_hk_skyscraper_03_hk_skyscraper_bottom_03_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true }),
       A('objects_architecture_skyscraper_waterfront_01_skyscraperwaterfront_01_mesh', { preset: 'building', maxSize: 512, normal: true, collide: true, night: 0.75 }),
@@ -235,6 +238,9 @@ export async function loadAll(tex, onProgress) {
         emissive: it.emissive,
         emissiveIntensity: it.emissiveIntensity,
         fog: !it.noFog,
+        // 透传玻璃开关：贴图名命中 "window/glass" 时是否真的做成半透明。
+        // 整栋楼的立面贴图常带 window 字样，必须能按资产显式关掉。
+        glass: it.glass,
       };
       let asset = await loadAsset(tex, it.f, opt);
       if (!asset) { done++; onProgress && onProgress({ phase: grp.label, done, total }); return; }
