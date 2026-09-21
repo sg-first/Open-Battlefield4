@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>上海 · 开放世界 FPS</title>
+<script>
+  // file:// 直接打开会因浏览器安全策略无法 fetch 模型与贴图，提前给出指引
+  if (location.protocol === 'file:') {
+    document.addEventListener('DOMContentLoaded', function () {
+      document.body.innerHTML =
+        '<div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;'
+        + 'background:#0a0e14;color:#e7eef7;font-family:Microsoft YaHei,sans-serif;text-align:center;padding:24px;line-height:2">'
+        + '<div><h2 style="color:#7fd1ff;margin-bottom:12px">请通过本地服务器打开</h2>'
+        + '在 export 目录执行：<br><b>python -m http.server 8811</b><br>'
+        + '然后访问 <b>http://localhost:8811/game/index.html</b></div></div>';
+    });
+  }
+</script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:100%;height:100%;overflow:hidden;background:#05070a;
+    font-family:"Microsoft YaHei","PingFang SC",-apple-system,system-ui,sans-serif;color:#e7eef7;
+    user-select:none;-webkit-user-select:none}
+  #app{position:fixed;inset:0}
+  canvas{display:block}
+
+  /* ---------- 通用面板 ---------- */
+  .panel{position:absolute;background:rgba(8,13,20,.55);backdrop-filter:blur(9px);
+    border:1px solid rgba(150,190,230,.16);border-radius:10px;padding:9px 12px;
+    font-size:12px;line-height:1.65;pointer-events:none;z-index:6}
+  .panel .t{font-size:12px;font-weight:700;letter-spacing:.6px;color:#9fd8ff;margin-bottom:5px}
+  kbd{display:inline-block;min-width:15px;text-align:center;padding:0 5px;margin-right:3px;
+    border:1px solid rgba(160,200,240,.32);border-bottom-width:2px;border-radius:4px;
+    background:rgba(160,200,240,.10);font-family:ui-monospace,Consolas,monospace;
+    font-size:11px;color:#cfe6ff}
+  .hidePanels .panel.opt{display:none}
+
+  /* ---------- 准星 ---------- */
+  #hudCross{position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none;z-index:5;
+    transition:opacity .12s}
+  #hudCross i{position:absolute;background:#e6f3ff;box-shadow:0 0 3px rgba(0,0,0,.85);
+    border-radius:1px}
+  #hudCross i:nth-child(1){width:2px;height:9px;left:-1px;top:0;transform-origin:50% 0}
+  #hudCross i:nth-child(2){width:2px;height:9px;left:-1px;top:0;transform-origin:50% 0}
+  #hudCross i:nth-child(3){width:9px;height:2px;left:0;top:-1px;transform-origin:0 50%}
+  #hudCross i:nth-child(4){width:9px;height:2px;left:0;top:-1px;transform-origin:0 50%}
+  #hudCross i:nth-child(1){top:-9px}
+  #hudCross i:nth-child(2){top:0}
+  #hudCross i:nth-child(3){left:-9px}
+  #hudCross i:nth-child(4){left:0}
+  #crossDot{position:absolute;left:50%;top:50%;width:3px;height:3px;margin:-1.5px 0 0 -1.5px;
+    background:#e6f3ff;border-radius:50%;z-index:5;box-shadow:0 0 3px rgba(0,0,0,.9)}
+
+  /* ---------- 命中标记 ---------- */
+  #hudHitmark{position:absolute;left:50%;top:50%;width:0;height:0;z-index:7;opacity:0;
+    transition:opacity .06s;pointer-events:none}
+  #hudHitmark b{position:absolute;width:9px;height:2px;background:#fff;
+    box-shadow:0 0 4px #000;border-radius:1px}
+  #hudHitmark b:nth-child(1){transform:translate(-11px,-11px) rotate(45deg)}
+  #hudHitmark b:nth-child(2){transform:translate(2px,-11px) rotate(-45deg)}
+  #hudHitmark b:nth-child(3){transform:translate(-11px,9px) rotate(-45deg)}
+  #hudHitmark b:nth-child(4){transform:translate(2px,9px) rotate(45deg)}
+  #hudHitmark.head b{background:#ff5a48}
+  #hudHitmark.kill b{background:#ff3b2f;box-shadow:0 0 8px #ff6a4a}
+
+  /* ---------- 弹药 ---------- */
+  #hudAmmoBox{position:absolute;right:26px;bottom:24px;text-align:right;z-index:6;
+    pointer-events:none;transition:transform .09s}
+  #hudAmmoBox.pop{transform:scale(1.10)}
+  #hudAmmo{font-size:42px;font-weight:800;line-height:1;letter-spacing:-1px;
+    color:#eef6ff;text-shadow:0 2px 14px rgba(0,0,0,.85);font-variant-numeric:tabular-nums}
+  #hudAmmoRes{font-size:17px;color:#93a9bf;font-weight:600;margin-left:6px;
+    font-variant-numeric:tabular-nums}
+  #hudWeapon{font-size:15px;font-weight:700;color:#9fd8ff;letter-spacing:.5px}
+  #hudWeaponKind{font-size:11px;color:#7d93a8}
+
+  /* ---------- 血量 ---------- */
+  #hudHpBox{position:absolute;left:26px;bottom:24px;width:230px;z-index:6;pointer-events:none}
+  #hudHpTrack{height:7px;border-radius:4px;background:rgba(255,255,255,.12);overflow:hidden;
+    border:1px solid rgba(160,200,240,.18)}
+  #hudHpBar{height:100%;width:100%;border-radius:4px;transition:width .18s,background .3s;
+    background:linear-gradient(90deg,#2f9e6f,#63d9a0)}
+  #hudHpRow{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+  #hudHpLabel{font-size:11px;color:#7d93a8;letter-spacing:1px}
+  #hudHpNum{font-size:19px;font-weight:800;color:#dceaf8;font-variant-numeric:tabular-nums}
+
+  /* ---------- 换弹进度 ---------- */
+  #hudReload{position:absolute;left:50%;top:calc(50% + 46px);transform:translateX(-50%);
+    width:130px;opacity:0;transition:opacity .15s;z-index:6;pointer-events:none}
+  #hudReload.on{opacity:1}
+  #hudReloadTrack{height:3px;border-radius:2px;background:rgba(255,255,255,.16);overflow:hidden}
+  #hudReloadIn{height:100%;width:0;background:linear-gradient(90deg,#ffb84d,#ffe0a0)}
+  #hudReloadTxt{font-size:10px;color:#c9a86a;text-align:center;margin-top:3px;letter-spacing:2px}
+
+  /* ---------- 信息 / 战况 ---------- */
+  #hudTop{top:16px;left:50%;transform:translateX(-50%);display:flex;gap:18px;
+    padding:7px 16px}
+  #hudTop .kv{text-align:center;min-width:56px}
+  #hudTop .k{font-size:10px;color:#7d93a8;letter-spacing:1px}
+  #hudTop .v{font-size:16px;font-weight:800;color:#e6f3ff;font-variant-numeric:tabular-nums}
+  #hudTop .v.red{color:#ff6a5a}
+
+  #hudStatus{top:16px;left:16px;min-width:172px}
+  #hudStatus .row{display:flex;justify-content:space-between;gap:12px}
+  #hudStatus .k{color:#8098ad}
+  #hudStatus .v{color:#e7eef7;font-variant-numeric:tabular-nums}
+
+  #hudFeed{top:16px;right:16px;min-width:190px;background:none;border:none;backdrop-filter:none;
+    padding:0}
+  .feedItem{display:flex;gap:7px;align-items:center;justify-content:flex-end;
+    background:rgba(8,13,20,.62);border:1px solid rgba(150,190,230,.14);border-radius:7px;
+    padding:3px 9px;margin-bottom:4px;font-size:12px;transition:opacity .6s;
+    animation:feedIn .22s ease-out}
+  @keyframes feedIn{from{transform:translateX(22px);opacity:0}to{transform:none;opacity:1}}
+  .feedItem .who{color:#8fe3ff;font-weight:700}
+  .feedItem .ico{color:#c8d8e8;font-size:11px}
+  .feedItem .tgt{color:#dbe7f3}
+  .feedItem.head{border-color:rgba(255,120,90,.45)}
+  .feedItem.head .ico{color:#ff6a4a}
+
+  /* ---------- 小地图 ---------- */
+  #miniWrap{bottom:16px;left:50%;transform:translateX(-50%);padding:8px;z-index:6}
+  #miniMap{display:block;border-radius:7px;background:#0d1116}
+  #miniTitle{font-size:10px;color:#7d93a8;text-align:center;margin-bottom:5px;letter-spacing:2px}
+
+  /* ---------- 操作提示 ---------- */
+  #help{bottom:16px;right:16px;max-width:250px;pointer-events:none}
+  #help .r{margin-top:2px}
+
+  /* ---------- 伤害数字 / 受击方向 ---------- */
+  #hudDmgNums{position:absolute;inset:0;pointer-events:none;z-index:5}
+  .dmgNum{position:absolute;left:0;top:0;font-size:18px;font-weight:800;color:#ffe08a;
+    text-shadow:0 2px 6px rgba(0,0,0,.95);display:none;will-change:transform,opacity}
+  .dmgNum.head{color:#ff6a4a;font-size:22px}
+  #hudIndicators{position:absolute;left:50%;top:50%;width:0;height:0;z-index:5;
+    pointer-events:none}
+  .dmgDir{position:absolute;left:-30px;top:-78px;width:60px;height:20px;display:none;
+    transform-origin:50% 78px;opacity:0}
+  .dmgDir:after{content:"";position:absolute;left:50%;top:0;width:0;height:0;margin-left:-9px;
+    border-left:9px solid transparent;border-right:9px solid transparent;
+    border-bottom:12px solid rgba(255,70,50,.92);filter:drop-shadow(0 0 5px rgba(255,60,40,.7))}
+
+  /* ---------- 受伤红晕 / 死亡 ---------- */
+  #hudVignette{position:absolute;inset:0;pointer-events:none;opacity:0;z-index:4;
+    transition:opacity .2s;
+    background:radial-gradient(ellipse at center,rgba(120,0,0,0) 38%,rgba(140,10,6,.62) 100%)}
+  #hudDeath{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    flex-direction:column;gap:10px;background:rgba(28,4,4,.42);backdrop-filter:grayscale(.6) blur(2px);
+    z-index:9;color:#ffd9d0}
+  #hudDeath.on{display:flex}
+  #hudDeath h2{font-size:30px;letter-spacing:8px;font-weight:800;color:#ff8b7a}
+  #hudDeath .s{font-size:13px;color:#d8b6ae}
+
+  /* ---------- 横幅公告 ---------- */
+  #hudBanner{position:absolute;left:50%;top:20%;transform:translate(-50%,0);text-align:center;
+    opacity:0;transition:opacity .35s;z-index:8;pointer-events:none}
+  #hudBanner.on{opacity:1}
+  #hudBannerT{font-size:26px;font-weight:800;letter-spacing:4px;color:#ffe6b8;
+    text-shadow:0 3px 18px rgba(0,0,0,.9)}
+  #hudBannerS{font-size:12px;color:#c9d8e6;letter-spacing:2px;margin-top:4px}
+
+  /* ---------- 载入 ---------- */
+  #loading{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 40%,#12202e,#05070a 70%);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    z-index:40;transition:opacity .6s}
+  #loading.done{opacity:0;pointer-events:none}
+  #loading h1{font-size:26px;font-weight:800;letter-spacing:9px;color:#cfe6ff}
+  #loading .sub{font-size:12px;color:#7f93aa;letter-spacing:1px}
+  #bar{width:min(460px,72vw);height:5px;border-radius:3px;background:rgba(255,255,255,.09);
+    overflow:hidden}
+  #barIn{height:100%;width:0;border-radius:3px;background:linear-gradient(90deg,#3d8fd6,#7fe3d0);
+    transition:width .25s}
+  #loadTxt{font-size:11px;color:#6f839a;height:15px;font-variant-numeric:tabular-nums}
+  #loadPct{font-size:32px;font-weight:800;color:#7fd1ff;font-variant-numeric:tabular-nums}
+
+  /* ---------- 暂停提示 ---------- */
+  #pauseHint{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    flex-direction:column;gap:12px;background:rgba(4,7,11,.45);backdrop-filter:blur(4px);
+    z-index:20;pointer-events:none;color:#dbe8f4}
+  #pauseHint.on{display:flex}
+  #pauseHint h2{font-size:20px;letter-spacing:5px;color:#9fd8ff}
+  #pauseHint .s{font-size:12px;color:#93a9bf}
+
+  /* ---------- 手持模型调参 ---------- */
+  #tuner{position:absolute;left:16px;top:50%;transform:translateY(-50%);display:none;
+    z-index:15;min-width:230px}
+  #tuner.on{display:block}
+  #tuner .tr{padding:1px 0;color:#b7c8d8}
+  #tuner .tr.sel{color:#ffd88a;font-weight:700}
+  #tuner .val{margin-top:6px;padding-top:6px;border-top:1px solid rgba(150,190,230,.16);
+    color:#8fe3ff}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<!-- 准星 -->
+<div id="hudCross"><i></i><i></i><i></i><i></i></div>
+<div id="crossDot"></div>
+
+<!-- 命中标记 -->
+<div id="hudHitmark"><b></b><b></b><b></b><b></b></div>
+
+<!-- 弹药 -->
+<div id="hudAmmoBox">
+  <div id="hudWeapon">SCAR-H</div>
+  <div id="hudWeaponKind">突击步枪 · 全自动</div>
+  <div><span id="hudAmmo">20</span><span id="hudAmmoRes">120</span></div>
+</div>
+
+<!-- 血量 -->
+<div id="hudHpBox">
+  <div id="hudHpRow"><span id="hudHpLabel">生命</span><span id="hudHpNum">100</span></div>
+  <div id="hudHpTrack"><div id="hudHpBar"></div></div>
+</div>
+
+<!-- 换弹 -->
+<div id="hudReload">
+  <div id="hudReloadTrack"><div id="hudReloadIn"></div></div>
+  <div id="hudReloadTxt">装弹中</div>
+</div>
+
+<!-- 战况 -->
+<div id="hudTop" class="panel">
+  <div class="kv"><div class="k">波次</div><div class="v" id="hudWave">1</div></div>
+  <div class="kv"><div class="k">剩余敌军</div><div class="v red" id="hudAlive">0</div></div>
+  <div class="kv"><div class="k">击杀</div><div class="v" id="hudScore">0</div></div>
+</div>
+
+<!-- 状态 -->
+<div id="hudStatus" class="panel">
+  <div class="t">上海 · 开放世界</div>
+  <div class="row"><span class="k">帧率</span><span class="v" id="hudFps">--</span></div>
+  <div class="row"><span class="k">时间</span><span class="v" id="hudTime">--</span></div>
+  <div class="row"><span class="k">坐标</span><span class="v" id="hudPos">--</span></div>
+  <div class="row"><span class="k">目标</span><span class="v" id="hudObjective">--</span></div>
+</div>
+
+<!-- 击杀提示 -->
+<div id="hudFeed" class="panel"></div>
+
+<!-- 小地图 -->
+<div id="miniWrap" class="panel opt">
+  <div id="miniTitle">街 区 地 图</div>
+  <canvas id="miniMap" width="208" height="208"></canvas>
+</div>
+
+<!-- 操作 -->
+<div id="help" class="panel opt">
+  <div class="t">操作</div>
+  <div class="r"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移动　<kbd>Shift</kbd> 疾跑　<kbd>Ctrl</kbd> 蹲</div>
+  <div class="r"><kbd>空格</kbd> 跳跃　<kbd>鼠标左键</kbd> 射击　<kbd>右键</kbd> 开镜</div>
+  <div class="r"><kbd>R</kbd> 换弹　<kbd>1</kbd><kbd>2</kbd> / <kbd>滚轮</kbd> 换枪</div>
+  <div class="r"><kbd>M</kbd> 地图　<kbd>T</kbd> 时间加速　<kbd>H</kbd> 隐藏面板</div>
+  <div class="r"><kbd>F</kbd> 补给并重生　<kbd>O</kbd> 武器手感调参</div>
+  <div class="r"><kbd>Esc</kbd> 释放鼠标</div>
+</div>
+
+<!-- 伤害数字 / 指示 -->
+<div id="hudDmgNums"></div>
+<div id="hudIndicators"></div>
+<div id="hudVignette"></div>
+
+<!-- 公告 -->
+<div id="hudBanner"><div id="hudBannerT"></div><div id="hudBannerS"></div></div>
+
+<!-- 死亡 -->
+<div id="hudDeath">
+  <h2>阵 亡</h2>
+  <div class="s">按 <kbd>F</kbd> 在出生点补给并重生</div>
+</div>
+
+<!-- 暂停 -->
+<div id="pauseHint">
+  <h2>已 暂 停</h2>
+  <div class="s">点击画面继续（锁定鼠标）</div>
+</div>
+
+<!-- 武器调参 -->
+<div id="tuner" class="panel"><div class="t">手持模型调参</div><div id="tunerBody"></div>
+  <div style="margin-top:6px;color:#7d93a8;font-size:11px"><kbd>,</kbd><kbd>.</kbd> 选项　<kbd>[</kbd><kbd>]</kbd> 调整　<kbd>Shift</kbd> 粗调　<kbd>P</kbd> 打印</div>
+</div>
+
+<!-- 载入 -->
+<div id="loading">
+  <h1>上 海</h1>
+  <div id="loadPct">0%</div>
+  <div id="bar"><div id="barIn"></div></div>
+  <div id="loadTxt">读取资产…</div>
+  <div class="sub">BF4 上海场景 · 开放世界 FPS　（首次加载需解析上百个 OBJ 与 2048² 贴图）</div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./lib/three.module.js" } }
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

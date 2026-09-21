@@ -1,0 +1,382 @@
+/* ============================================================
+   上海 · 开放世界 FPS —— 主程序
+   ============================================================ */
+import * as THREE from 'three';
+import { TexCache } from './obj.js';
+import { loadAll, WorldBuilder } from './assets.js';
+import { BoxWorld } from './collision.js';
+import { FX } from './fx.js';
+import { GameAudio } from './audio.js';
+import { HUD } from './hud.js';
+import { Player } from './player.js';
+import { WeaponSystem, WEAPON_DEFS } from './weapons.js';
+import { CharacterFactory } from './characters.js';
+import { EnemyManager } from './enemies.js';
+import { buildWorld, Civilians, skyStateAt, sunDirAt, CITY } from './world.js';
+import { clamp, smoothstep, yieldFrame } from './util.js';
+
+const $ = (id) => document.getElementById(id);
+
+/* ---------------------------------------------------------- 渲染器 */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.autoClear = false;
+$('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(78, innerWidth / innerHeight, 0.1, 4200);
+
+/* ---------------------------------------------------------- 载入进度 */
+const loadEl = $('loading');
+const barIn = $('barIn');
+const loadTxt = $('loadTxt');
+const loadPct = $('loadPct');
+
+function setProgress(p, txt) {
+  barIn.style.width = (clamp(p, 0, 1) * 100).toFixed(1) + '%';
+  if (loadPct) loadPct.textContent = (clamp(p, 0, 1) * 100).toFixed(0) + '%';
+  if (txt) loadTxt.textContent = txt;
+}
+
+/* ---------------------------------------------------------- 启动 */
+let started = false;
+const state = {
+  clock: 17.35,
+  timeFlow: 0.02,
+  showMap: true,
+  paused: false,
+};
+
+let audio, hud, player, weapons, enemies, civilians, fx, boxes, worldInfo, glowMats = [], bgMats = [];
+
+async function boot() {
+  const tex = new TexCache(Math.min(8, renderer.capabilities.getMaxAnisotropy()));
+  setProgress(0.02, '初始化…');
+  await yieldFrame();
+
+  const { assets, glowMats: gm, bgMats: bm } = await loadAll(tex, ({ phase, done, total }) => {
+    setProgress(0.05 + 0.72 * (done / total), `${phase}　${done}/${total}`);
+  });
+  glowMats = gm; bgMats = bm || [];
+  setProgress(0.8, '构建街区…');
+  await yieldFrame();
+
+  boxes = new BoxWorld();
+  const builder = new WorldBuilder(scene, assets, boxes);
+  worldInfo = buildWorld({ scene, assets, builder });
+  const stats = builder.build();
+  boxes.finalize();
+  setProgress(0.93, '生成角色与战斗系统…');
+  await yieldFrame();
+
+  // 系统
+  audio = new GameAudio();
+  fx = new FX(scene, camera, boxes);
+  hud = new HUD({ camera, boxes, extent: worldInfo.extent * 1.05 });
+  hud.buildStaticMap();
+  camera.position.set(0, 2, 0);
+  camera.updateMatrixWorld(true);
+
+  player = new Player({
+    camera, boxes, audio, hud, fov: 78,
+    spawn: { x: worldInfo.spawn.x, z: worldInfo.spawn.z, yaw: worldInfo.spawn.yaw },
+  });
+  player.pos.y = boxes.floorAt(player.pos.x, player.pos.z, 50);
+  player.spawnPoint.copy(player.pos);
+
+  weapons = new WeaponSystem({
+    camera, fx, audio, boxes, hud, assets, fov: 78,
+    tuning: loadTuning(),
+  });
+  weapons.setViewport(innerWidth / innerHeight, camera.fov);
+  hud.setWeapon(weapons.current);
+  hud.setAmmo(weapons.current.mag, weapons.current.reserve);
+
+  const factory = new CharacterFactory(assets);
+  enemies = new EnemyManager({
+    scene, boxes, factory, assets, fx, audio, hud, player,
+    weapons: WEAPON_DEFS,
+    spawnPoints: worldInfo.enemySpawns,
+  });
+  enemies.onPlayerHit = () => hud.screenShake(0.03);
+
+  civilians = new Civilians({ scene, boxes, factory, audio });
+  civilians.spawn(26, worldInfo.npcSpawns);
+
+  hud.setObjective('目标：清理街区的敌军');
+  hud.setScore(0);
+
+  setProgress(1, '就绪');
+  await yieldFrame();
+  loadEl.classList.add('done');
+  setTimeout(() => { loadEl.style.display = 'none'; }, 700);
+
+  enemies.spawnWave();
+  audio.resume();
+  audio.ambientStart();
+
+  window.__THREE = THREE;
+  window.__game = {
+    scene, camera, renderer, player, weapons, enemies, civilians, boxes, worldInfo, stats,
+    builder, tex, state, hud,
+    setClock: (h) => { state.clock = h; },
+    render: () => {
+      renderer.clear();
+      renderer.render(scene, camera);
+      renderer.clearDepth();
+      renderer.render(weapons.vmScene, weapons.vmCamera);
+    },
+  };
+  console.log('[上海] 实例', stats.instances, '网格', stats.meshes, '三角面', stats.tris,
+    '常驻(Instanced)', builder.instancedTris(), '贴图', tex.count, '显存≈', (tex.bytes / 1048576).toFixed(0) + 'MB',
+    '调试占位贴图', tex.placeholderCount || 0);
+  console.log('[上海] 三角面 TOP:', builder.topAssets(10)
+    .map((t) => `${t.name.replace(/^.*_/, '').slice(0, 26)}x${t.n}=${(t.tris / 1000).toFixed(0)}k`).join(' '));
+}
+
+/* ---------------------------------------------------------- 输入 */
+const keys = Object.create(null);
+const input = { forward: 0, right: 0, jump: false, sprint: false, crouch: false, ads: false, adsZoom: 1 };
+let mouseDown = false, rmbDown = false;
+
+onkeydown = (e) => {
+  const k = e.code;
+  if (k === 'Space' || k === 'Tab') e.preventDefault();
+  if (keys[k]) return;
+  keys[k] = true;
+  audio && audio.resume();
+  if (!started) return;
+  switch (k) {
+    case 'KeyR': weapons.startReload(); break;
+    case 'Digit1': weapons.selectSlot(0); break;
+    case 'Digit2': weapons.selectSlot(1); break;
+    case 'KeyQ': weapons.next(-1); break;
+    case 'KeyE': weapons.next(1); break;
+    case 'KeyM': state.showMap = !state.showMap; $('miniWrap').style.display = state.showMap ? '' : 'none'; break;
+    case 'KeyH': document.body.classList.toggle('hidePanels'); break;
+    case 'KeyT': state.timeFlow = state.timeFlow > 0.05 ? 0.02 : 0.6; break;
+    case 'KeyO': toggleTuner(); break;
+    case 'KeyP': if (tunerOn) printTuning(); break;
+    case 'BracketLeft': if (tunerOn) tuneStep(-1); break;
+    case 'BracketRight': if (tunerOn) tuneStep(1); break;
+    case 'Comma': if (tunerOn) tuneSelect(-1); break;
+    case 'Period': if (tunerOn) tuneSelect(1); break;
+    case 'KeyF': player.respawn(); weapons.refill(); break;
+    default: break;
+  }
+};
+onkeyup = (e) => { keys[e.code] = false; };
+
+renderer.domElement.addEventListener('mousedown', (e) => {
+  audio && audio.resume();
+  if (!started) return;
+  if (e.button === 0) mouseDown = true;
+  if (e.button === 2) rmbDown = true;
+  if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
+});
+onmouseup = (e) => {
+  if (e.button === 0) mouseDown = false;
+  if (e.button === 2) rmbDown = false;
+};
+oncontextmenu = (e) => e.preventDefault();
+onmousemove = (e) => {
+  if (document.pointerLockElement !== renderer.domElement || !started) return;
+  const adsScale = weapons && weapons.adsActive ? weapons.def.adsSens : 1;
+  player.look(e.movementX || 0, e.movementY || 0, adsScale);
+  if (weapons) {
+    weapons.swayTarget.x = clamp(weapons.swayTarget.x + (e.movementX || 0) * 0.0016, -1, 1);
+    weapons.swayTarget.y = clamp(weapons.swayTarget.y + (e.movementY || 0) * 0.0016, -1, 1);
+  }
+};
+onwheel = (e) => { if (started && weapons) weapons.next(e.deltaY > 0 ? 1 : -1); };
+onresize = () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  if (weapons) weapons.setViewport(innerWidth / innerHeight, camera.fov);
+};
+renderer.domElement.addEventListener('click', () => {
+  audio && audio.resume();
+  if (started && document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === renderer.domElement;
+  $('pauseHint').classList.toggle('on', started && !locked);
+  if (started) state.paused = !locked;
+});
+
+/* ---------------------------------------------------------- 手持模型调参 */
+let tunerOn = false;
+let tuneIdx = 0;
+const TUNE_KEYS = ['px', 'py', 'pz', 'rx', 'ry', 'rz'];
+const TUNE_GROUPS = [['scar', '基准'], ['scar_ads', '开镜'], ['ump', '基准'], ['ump_ads', '开镜']];
+let tuning = null;
+
+function loadTuning() {
+  const blank = {};
+  for (const [g] of TUNE_GROUPS) blank[g] = { px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0 };
+  try {
+    const s = localStorage.getItem('bf4_sh_tuning');
+    if (s) {
+      const v = JSON.parse(s);
+      for (const [g] of TUNE_GROUPS) if (v[g]) Object.assign(blank[g], v[g]);
+    }
+  } catch (e) { /* ignore */ }
+  tuning = blank;
+  return blank;
+}
+function toggleTuner() {
+  tunerOn = !tunerOn;
+  $('tuner').classList.toggle('on', tunerOn);
+  updateTunerUI();
+}
+function tuneSelect(d) {
+  tuneIdx = (tuneIdx + d + TUNE_GROUPS.length * TUNE_KEYS.length) % (TUNE_GROUPS.length * TUNE_KEYS.length);
+  updateTunerUI();
+}
+function tuneStep(d) {
+  const gi = Math.floor(tuneIdx / TUNE_KEYS.length) % TUNE_GROUPS.length;
+  const ki = tuneIdx % TUNE_KEYS.length;
+  const g = TUNE_GROUPS[gi][0], k = TUNE_KEYS[ki];
+  const scale = keys['ShiftLeft'] || keys['ShiftRight'] ? 10 : 1;
+  const stepSize = (k[0] === 'r' ? 0.01 : 0.005) * scale * d;
+  tuning[g][k] = +(tuning[g][k] + stepSize).toFixed(4);
+  localStorage.setItem('bf4_sh_tuning', JSON.stringify(tuning));
+  updateTunerUI();
+}
+function updateTunerUI() {
+  const gi = Math.floor(tuneIdx / TUNE_KEYS.length) % TUNE_GROUPS.length;
+  const ki = tuneIdx % TUNE_KEYS.length;
+  const g = TUNE_GROUPS[gi][0], k = TUNE_KEYS[ki];
+  const el = $('tunerBody');
+  if (el) {
+    el.innerHTML = TUNE_GROUPS.map((grp, i) =>
+      `<div class="tr ${i === gi ? 'sel' : ''}"><b>${grp[0]}</b> ${grp[1]}</div>`).join('')
+      + `<div class="val">当前：<b>${g}.${k}</b> = ${tuning[g][k].toFixed(4)}</div>`;
+  }
+}
+function printTuning() {
+  console.log('手持模型调参：', JSON.stringify(tuning));
+}
+
+/* ---------------------------------------------------------- 天空与光照 */
+const _sunDir = new THREE.Vector3();
+function updateSky(dt) {
+  state.clock = (state.clock + dt * state.timeFlow) % 24;
+  const dir = sunDirAt(state.clock);
+  _sunDir.copy(dir);
+  const st = skyStateAt(dir.y);
+  const U = worldInfo.skyU;
+  U.top.value.set(st.top); U.mid.value.set(st.mid); U.bot.value.set(st.bot);
+  U.sunCol.value.set(st.sun); U.sunDir.value.copy(dir);
+  U.sunI.value = 1;
+
+  const sun = worldInfo.sun;
+  sun.position.copy(dir).multiplyScalar(260).add(player.pos);
+  sun.target.position.copy(player.pos);
+  sun.target.updateMatrixWorld();
+  sun.color.set(st.sun);
+  sun.intensity = st.dir * 1.15;
+  worldInfo.hemi.intensity = st.hemi;
+  worldInfo.amb.intensity = st.amb;
+  scene.fog.color.setHex(st.fog);
+  renderer.toneMappingExposure = st.exp;
+
+  // 夜间自发光
+  const night = clamp(1 - smoothstep(-0.06, 0.20, dir.y), 0, 1);
+  if (!window.__glowSet || Math.abs(window.__glowNight - night) > 0.01) {
+    window.__glowNight = night;
+    for (const m of glowMats) m.emissiveIntensity = night * 1.5 * (m.userData.glow || 1);
+  }
+  // 远景建筑融入雾色
+  const haze = new THREE.Color(st.bot).lerp(new THREE.Color(st.mid), 0.35);
+  for (const m of bgMats) m.color.copy(haze).lerp(new THREE.Color(0xffffff), 0.45);
+}
+
+/* ---------------------------------------------------------- 主循环 */
+let last = performance.now();
+let fpsAcc = 0, fpsN = 0, fps = 60;
+let tSec = 0;
+
+function frame() {
+  requestAnimationFrame(frame);
+  const now = performance.now();
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > 0.1) dt = 0.1;
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc > 0.5) { fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; }
+  tSec += dt;
+
+  if (!started) {
+    renderer.clear();
+    renderer.render(scene, camera);
+    return;
+  }
+
+  const frozen = state.paused || player.dead;
+
+  // ---- 输入映射
+  input.forward = (keys['KeyW'] ? 1 : 0) - (keys['KeyS'] ? 1 : 0);
+  input.right = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0);
+  input.sprint = !!(keys['ShiftLeft'] || keys['ShiftRight']);
+  input.crouch = !!(keys['ControlLeft'] || keys['KeyC']);
+  input.jump = !!keys['Space'];
+  input.ads = rmbDown && !weapons.isReloading;
+  input.adsZoom = input.ads ? weapons.def.adsZoom : 1;
+
+  if (!frozen) {
+    player.update(dt, input);
+    camera.updateMatrixWorld(true);
+    weapons.setTrigger(mouseDown);
+    weapons.update(dt, {
+      time: tSec,
+      speed: player.speed,
+      onGround: player.onGround,
+      crouch: player.crouch > 0.4,
+      ads: input.ads,
+      sprint: input.sprint,
+      raycastEnemies: (o, d, m) => enemies.raycastEnemies(o, d, m),
+      addRecoil: (p, y) => player.addRecoil(p, y),
+      onShot: (def) => { player.shake(0.006); },
+      playerPos: player.pos,
+    });
+    enemies.update(dt);
+    civilians.update(dt, player);
+  }
+
+  fx.update(dt);
+  audio.ambientUpdate(dt);
+  if (worldInfo.waterNormal) {
+    worldInfo.waterNormal.offset.x += dt * 0.006;
+    worldInfo.waterNormal.offset.y += dt * 0.004;
+  }
+  updateSky(dt);
+  hud.update(dt, {
+    player, weapon: weapons, enemies: enemies.enemies,
+    fps, clock: state.clock, ads: weapons.adsActive,
+  });
+
+  // ---- 渲染：世界 → 手持模型
+  renderer.clear();
+  renderer.render(scene, camera);
+  renderer.clearDepth();
+  renderer.render(weapons.vmScene, weapons.vmCamera);
+}
+
+/* ---------------------------------------------------------- 启动 */
+boot().then(() => {
+  started = true;
+  last = performance.now();
+  frame();
+}).catch((e) => {
+  console.error(e);
+  loadTxt.textContent = '启动失败：' + (e && e.message ? e.message : e);
+  loadTxt.style.color = '#ff8b7a';
+});
