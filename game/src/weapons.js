@@ -34,8 +34,12 @@ export const WEAPON_DEFS = {
     switchTime: 0.62,
     pose: {
       idle: { pos: [0.146, -0.134, -0.372], rot: [0.030, -0.052, 0.055] },
-      ads: { pos: [0.0, -0.092, -0.300], rot: [0.0, 0.0, 0.0] },
     },
+    // 机械瞄具顶点（模型局部坐标：资产按包围盒居中，+Z 指向枪口）。
+    // 实测自模型顶部轮廓：导轨面在 y=+0.084，上面两个等高突起即照门与准星。
+    //   rear  z=-0.178  y=+0.1295（照门）   front z=+0.239  y=+0.1303（准星）
+    // 开镜姿势由这两个点反推，见 adsPose()。
+    sight: { rear: [-0.0057, 0.1295, -0.1775], front: [-0.0053, 0.1303, 0.2386], eyeRelief: 0.22 },
     muzzle: [0.0, 0.014, 0.0],
     eject: [-0.032, 0.026, 0.085],
     sfx: 'scar',
@@ -63,9 +67,15 @@ export const WEAPON_DEFS = {
     reloadTac: 2.05, reloadEmpty: 2.65,
     switchTime: 0.55,
     pose: {
-      idle: { pos: [0.138, -0.128, -0.342], rot: [0.032, -0.044, 0.050] },
-      ads: { pos: [0.0, -0.080, -0.272], rot: [0.0, 0.0, 0.0] },
+      // 腰射与开镜共用同一条基准（SCAR 也是这样）：
+      //   y = -瞄准线高度(0.153)  → 瞄具正好在视线高度，抬枪时不会上下跳
+      //   z 比开镜再往回收 0.025  → 枪托(局部 z<-0.17)整体退到相机后面
+      idle: { pos: [0.138, -0.153, -0.215], rot: [0.032, -0.044, 0.050] },
     },
+    // 该 3P 道具网格没有可用的准星（机匣顶部 y=+0.143 之后一路下降到 +0.132，
+    // 前方只有护木细节），因此只对齐照门：机匣尾部最高的那个 y=+0.153 突起。
+    // front 传 null 表示枪身与视轴平行、不做俯仰补偿。
+    sight: { rear: [-0.0005, 0.1530, -0.0400], front: null, eyeRelief: 0.20 },
     muzzle: [0.0, 0.010, 0.0],
     eject: [-0.028, 0.022, 0.055],
     sfx: 'ump',
@@ -94,6 +104,45 @@ function reloadKeys(def) {
 }
 
 const SPRINT_POSE = { pos: [0.085, -0.165, 0.030], rot: [-0.58, -0.44, 0.22] };
+
+/** 手持模型相机相对主相机 FOV 的缩放：略窄一点，让枪看起来更「端在手里」 */
+const VM_FOV_SCALE = 0.92;
+
+/**
+ * 由机械瞄具反推开镜姿势（不再用手调的魔法数字）。
+ *
+ * 手持模型在 pivot 下绕 Y 轴转了 180°（资产 +Z 朝前 → 相机 -Z 朝前），
+ * 所以模型局部点 (x, y, z) 在 pivot 空间里是 (-x, y, -z)。
+ *
+ * 开镜的定义是「眼睛落在照门→准星这条瞄准线上」，于是：
+ *   ① 平移：把瞄准线上「照门后方 eyeRelief 米」的那一点挪到相机原点；
+ *   ② 俯仰：绕 X 轴旋转，使瞄准线指向相机正前方 -Z。
+ * 平移量要带上这个旋转（pivot 的 position 是父空间量，不受自身 rotation 影响，
+ * 而照门是被 rotation 带着转的），即 pos = -Rx(θ) · eye。
+ *
+ * 这样准星、照门、枪口三点一线，弹道（从相机原点沿 -Z 射出）与瞄准线完全重合。
+ *
+ * @param {number[]} rear      照门顶点（模型局部坐标）
+ * @param {number[]|null} front 准星顶点；模型没有可用准星时传 null，退化为只对齐照门
+ * @param {number} eyeRelief   眼睛到照门的距离（米）
+ */
+function adsPose(rear, front, eyeRelief) {
+  const R = new THREE.Vector3(-rear[0], rear[1], -rear[2]);
+  const dir = front
+    ? new THREE.Vector3(-front[0], front[1], -front[2]).sub(R).normalize()
+    : new THREE.Vector3(0, 0, -1);
+
+  // 眼睛在照门后方，即沿瞄准线的反方向退 eyeRelief 米
+  const eye = R.clone().addScaledVector(dir, -eyeRelief);
+
+  // θ = atan2(-dy, -dz) 使 Rx(θ) · dir = (0, 0, -1)
+  const rx = Math.atan2(-dir.y, -dir.z);
+  const cs = Math.cos(rx), sn = Math.sin(rx);
+  return {
+    pos: [-eye.x, -(eye.y * cs - eye.z * sn), -(eye.y * sn + eye.z * cs)],
+    rot: [rx, 0, 0],
+  };
+}
 
 export class WeaponSystem {
   constructor(o) {
@@ -198,12 +247,17 @@ export class WeaponSystem {
       flashLight.position.z = 0.1;
       muzzle.add(flashLight);
 
+      const ads = def.sight
+        ? adsPose(def.sight.rear, def.sight.front, def.sight.eyeRelief)
+        : { pos: [0, -0.090, -0.300], rot: [0, 0, 0] };
+
       this.weapons[id] = {
         def, asset, pivot, swayG, recoilG, mesh, muzzle, eject, flash, flashLight,
         mag: def.mag, reserve: def.reserve,
         keys: reloadKeys(def),
         flashLife: 0,
         size: asset.size,
+        ads,
       };
       pivot.visible = false;
     }
@@ -275,6 +329,15 @@ export class WeaponSystem {
     const w = this.current;
     if (!w) return;
     const def = w.def;
+
+    // ---- 手持模型相机跟随主相机 FOV
+    // 开镜时世界被放大（adsZoom），枪若仍按腰射 FOV 渲染就会和世界脱节
+    // （枪显得又小又远）。瞄准线过原点，缩放 FOV 不影响开镜对齐。
+    const vmFov = this.camera.fov * VM_FOV_SCALE;
+    if (Math.abs(this.vmCamera.fov - vmFov) > 1e-3) {
+      this.vmCamera.fov = vmFov;
+      this.vmCamera.updateProjectionMatrix();
+    }
 
     // ---- 切换动画
     if (this.switching) {
@@ -400,7 +463,7 @@ export class WeaponSystem {
     const w = this.current;
     const def = w.def;
     const a = this.adsT;
-    const p0 = def.pose.idle, p1 = def.pose.ads;
+    const p0 = def.pose.idle, p1 = w.ads;
 
     let px = lerp(p0.pos[0], p1.pos[0], a);
     let py = lerp(p0.pos[1], p1.pos[1], a);
@@ -625,7 +688,7 @@ export class WeaponSystem {
   /** 视口变化时同步手持模型相机 */
   setViewport(aspect, fov) {
     this.vmCamera.aspect = aspect;
-    this.vmCamera.fov = fov * 0.92;
+    this.vmCamera.fov = fov * VM_FOV_SCALE;
     this.vmCamera.updateProjectionMatrix();
   }
 }

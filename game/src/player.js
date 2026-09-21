@@ -237,9 +237,10 @@ export class Player {
     cam.rotation.set(this.pitch + this.recoilPitch, this.yaw + this.recoilYaw, roll, 'YXZ');
 
     // ---- FOV
+    // adsZoom 是「放大倍数」：开镜要缩小 FOV（除以倍数）
     const fovTarget = this.fovBase
       * (this.sprint ? 1.06 : 1)
-      * (input.ads ? input.adsZoom || 1 : 1);
+      / (input.ads ? input.adsZoom || 1 : 1);
     this.fov = damp(this.fov, fovTarget, 12, dt);
     cam.fov = this.fov;
     cam.updateProjectionMatrix();
