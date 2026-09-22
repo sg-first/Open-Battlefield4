@@ -19,6 +19,18 @@ export const CITY = {
   QUAY_X: -300,        // 滨江岸线
 };
 
+/* ---------------------------------------------------------- 夜间路灯格点
+   这里是夜景照明唯一的「灯位定义」。实体灯头/灯杆按它生成，
+   NightLightPool 注入到路面/人行道材质里的光池着色器也按同一组
+   参数解析求值 —— 两处不同源的话，地上的光斑就会和灯头对不上。 */
+export const LAMP = {
+  H: 6.4,                                 // 灯头高度
+  SIDE: 9.5,                              // 灯位离道路中心线的横向距离
+  SPAN_V: 46,                             // 纵向街道沿 Z 的灯间距
+  SPAN_H: 58,                             // 横向街道沿 X 的灯间距
+  RANGE: (CITY.GRID + 1) * CITY.BLOCK,    // 348：灯位覆盖整个路网
+};
+
 /* ---------------------------------------------------------- 天空 */
 const SKY_KEYS = [
   { e: -0.45, top: '#080f24', mid: '#16203c', bot: '#242f4a', sun: '#7f9ac6', dir: 0.22, amb: 0.30, hemi: 0.34, fog: 0x131b30, exp: 1.35 },
@@ -311,32 +323,44 @@ export function buildWorld(o) {
     }
   }
 
-  /* ---------------- 夜景布景（路灯已不发光）----------------
-     夜晚街道全部由建筑窗光（NightLightPool）照亮。
-     灯杆/灯头保留作街景道具：熄灭状态，深色玻璃罩。 */
+  /* ---------------- 夜景路灯（覆盖整个路网）----------------
+     灯位是规则格点（见顶部的 LAMP）：纵向/横向街道两侧都布灯，
+     间距 46 / 58m，一直铺到路网边缘 —— 之前只在 |x|≤60、|z|≤210
+     的「中心区」布灯，外围那几条街根本没有灯位，夜里自然是全黑。
+     灯头/灯杆只是可见实体；真正的"光池"由 NightLightPool 把同一组
+     格点参数注入路面/人行道材质后逐像素解析求值，因此任何一条街
+     都亮，且不受动态光源数量（几百盏就编译炸了）的限制。 */
   const lampMat = new THREE.MeshBasicMaterial({ color: 0x1e242a, toneMapped: false });
-  const lampGeo = new THREE.SphereGeometry(0.095, 8, 6);
+  const lampGeo = new THREE.SphereGeometry(0.115, 8, 6);
   const lampPoles = [];
-  // 建筑发光点（塔楼/裙楼中心）：夜光池从中挑最近的几盏做「窗光洒向街道」
+  const lamps = [];
+  // 建筑发光点（塔楼/裙楼中心）：环境窗光从中挑最近的几栋做暖色洗墙
   const glowPoints = [];
-  const addLamp = (x, z, h = 5.4) => {
-    const bulb = new THREE.Mesh(lampGeo, lampMat);
-    bulb.position.set(x, h, z);
-    bulb.frustumCulled = false;
-    scene.add(bulb);
-    lampPoles.push([x, z, h]);
-  };
-  // 在中心街区的交叉口和人行道布置暖色钠灯，与玻璃反射/后期高光共同形成夜景深度。
+  const addLamp = (x, z) => { lamps.push({ x, z }); lampPoles.push([x, z, LAMP.H]); };
+
+  // 纵向街道：两侧灯位对齐同一 z 格点（z 必须是 SPAN_V 的整数倍，着色器按此索引）
+  const lampZ0 = Math.ceil(-LAMP.RANGE / LAMP.SPAN_V) * LAMP.SPAN_V;
   for (const x of roadCenters) {
-    if (Math.abs(x) > 60) continue; // 灯光预算集中在可游玩的中心城区
-    for (let z = -210; z <= 210; z += 46) {
-      addLamp(x - 9.5, z, 6.4, 0xffd4a0);
-      addLamp(x + 9.5, z + 18, 6.4, 0xffc77d);
+    for (let z = lampZ0; z <= LAMP.RANGE; z += LAMP.SPAN_V) {
+      addLamp(x - LAMP.SIDE, z);
+      addLamp(x + LAMP.SIDE, z);
     }
   }
+  // 横向街道：x 方向错开半格，避免路口处两种灯位完全重合
+  const lampX0 = Math.ceil(-LAMP.RANGE / LAMP.SPAN_H) * LAMP.SPAN_H + LAMP.SPAN_H * 0.5;
   for (const z of roadCenters) {
-    if (Math.abs(z) > 60) continue;
-    for (let x = -210; x <= 210; x += 58) addLamp(x, z - 9.5, 6.1, 0xffd6a2);
+    for (let x = lampX0; x <= LAMP.RANGE; x += LAMP.SPAN_H) {
+      addLamp(x, z - LAMP.SIDE);
+      addLamp(x, z + LAMP.SIDE);
+    }
+  }
+  // 灯头：整批一个 InstancedMesh（逐个 Mesh 会有两百多个 draw call）
+  if (lamps.length) {
+    const bulbs = new THREE.InstancedMesh(lampGeo, lampMat, lamps.length);
+    const bm = new THREE.Matrix4(), bv = new THREE.Vector3(), bq = new THREE.Quaternion(), bs = new THREE.Vector3(1, 1, 1);
+    lamps.forEach((l, i) => { bv.set(l.x, LAMP.H, l.z); bulbs.setMatrixAt(i, bm.compose(bv, bq, bs)); });
+    bulbs.instanceMatrix.needsUpdate = true;
+    scene.add(bulbs);
   }
   // 灯杆：给悬在半空的灯头一个落地支撑（否则白天只能看到飘着的小球）
   if (lampPoles.length) {
@@ -355,7 +379,12 @@ export function buildWorld(o) {
     scene.add(poles);
   }
   S.lampPoles = lampPoles;
+  S.lamps = lamps;
+  S.lampMat = lampMat;
+  S.lampWarm = new THREE.Color(0xffcf92);
   S.glowPoints = glowPoints;
+  // 大地基底面也采样街道光贴图：街区内部的天井不至于变成死黑
+  S.groundExtra = [mainLand.material];
 
   /* ---------------- 建筑 ---------------- */
   const KITS = {

@@ -68,7 +68,7 @@ async function boot() {
   setProgress(0.02, '初始化…');
   await yieldFrame();
 
-  const { assets, glowMats: gm, bgMats: bm } = await loadAll(tex, ({ phase, done, total }) => {
+  const { assets, glowMats: gm, bgMats: bm, streetMats: sm, litMats: lm } = await loadAll(tex, ({ phase, done, total }) => {
     setProgress(0.05 + 0.72 * (done / total), `${phase}　${done}/${total}`);
   });
   glowMats = gm; bgMats = bm || [];
@@ -87,7 +87,13 @@ async function boot() {
   post = new PostFX(renderer);
   audio = new GameAudio();
   fx = new FX(scene, camera, boxes);
-  nightPool = new NightLightPool(scene, worldInfo);
+  // 夜光池：路面/人行道/大地采样烘焙光照贴图，街面物体（招牌/道具/车辆）吃余光
+  nightPool = new NightLightPool(scene, worldInfo,
+    [...(sm || []), ...(worldInfo.groundExtra || [])], lm || []);
+  // 烘焙街道光照贴图：全路网灯位光斑 + 静态遮挡影子，一次烘死
+  setProgress(0.92, '烘焙街道光照…');
+  await yieldFrame();
+  nightPool.bake(boxes);
   // 燃烧点：楼顶/残骸上冒出的浓烟柱与火光
   if (worldInfo.fires) for (const f of worldInfo.fires) fx.addFire(f.x, f.y, f.z, f.s);
   hud = new HUD({ camera, boxes, extent: worldInfo.extent * 1.05 });
@@ -527,7 +533,7 @@ function updateSky(dt) {
       envIntensity: scene.environmentIntensity,
     });
   }
-  // 夜光池：建筑窗光（照亮街道；路灯已移除，不参与夜间照明）
+  // 夜光池：全城路灯光池（注入路面材质）+ 玩家附近的真实投影路灯 + 建筑窗光
   if (nightPool) nightPool.update(player.pos.x, player.pos.z, night, dt);
 
   // 远景建筑融入雾色

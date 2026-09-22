@@ -228,6 +228,8 @@ export async function loadAll(tex, onProgress) {
   const assets = new Map();
   const glowMats = [];
   const bgMats = [];
+  const streetMats = [];      // 路面/人行道：夜里由 NightLightPool 注入"灯位光池"着色器
+  const litMats = [];         // 街面物体（道具/车辆）：吃路灯光贴图的余光
   const names = [];
   for (const g of Object.values(GROUPS)) for (const it of g.items) names.push(it.f);
   const total = names.length;
@@ -289,6 +291,23 @@ export async function loadAll(tex, onProgress) {
       if (it.preset === 'backdrop') {
         for (const p of asset.parts) bgMats.push(p.material);
       }
+      if (it.preset === 'ground') {
+        for (const p of asset.parts) if (p.material) streetMats.push(p.material);
+      }
+      // 道具/车辆夜里要吃到路灯光贴图的余光（竖版灯箱招牌、弃车等）。
+      // 程序化材质按 kind+variant 全局缓存共享，必须克隆后再交给夜光池 patch，
+      // 否则会把同一份材质上的改动污染到共用它的建筑。
+      if (it.preset === 'prop' || it.preset === 'vehicle') {
+        for (const p of asset.parts) {
+          let m = p.material;
+          if (m && m.userData && m.userData.proc) {
+            m = m.clone();
+            reattachProcShader(m);
+            p.material = m;
+          }
+          if (m) litMats.push(m);
+        }
+      }
       assets.set(it.f, asset);
       done++;
       onProgress && onProgress({ phase: grp.label, done, total });
@@ -296,7 +315,7 @@ export async function loadAll(tex, onProgress) {
     await Promise.all(jobs);
     await yieldFrame();
   }
-  return { assets, glowMats, bgMats, total };
+  return { assets, glowMats, bgMats, streetMats, litMats, total };
 }
 
 /* ---------------------------------------------------------- 世界实例化 */
