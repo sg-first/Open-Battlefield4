@@ -22,10 +22,11 @@
 import * as THREE from 'three';
 
 const SHADOW_COUNT = 3;             // 投影窗光数
-const GLOW_COUNT = 10;              // 环境窗光数
+const GLOW_COUNT = 8;               // 环境窗光数
 const GLOW_RANGE = 64.0;           // 环境窗光作用半径
 const SPOT_RANGE = 48.0;           // 投影窗光作用半径
 const REASSIGN_INTERVAL = 0.4;     // 重新吸附间隔（秒）
+const SPOT_LEAD = 11;              // 投影窗光落在离玩家多远处（米）
 
 export class NightLightPool {
   constructor(scene, info) {
@@ -38,8 +39,8 @@ export class NightLightPool {
     /* ---- 投影窗光：SpotLight 向下（阴影） ---- */
     this.spots = [];
     for (let i = 0; i < SHADOW_COUNT; i++) {
-      const s = new THREE.SpotLight(0xffb377, 0, SPOT_RANGE, 1.25, 0.45, 1.6);
-      s.position.set(0, 11, 0);
+      const s = new THREE.SpotLight(0xffb377, 0, SPOT_RANGE, 1.32, 0.6, 1.55);
+      s.position.set(0, 13, 0);
       s.target.position.set(0, 0, 0);
       s.castShadow = true;
       s.shadow.mapSize.set(1024, 1024);
@@ -90,12 +91,12 @@ export class NightLightPool {
     const t = performance.now() * 0.001;
     // 投影窗光：稳定（建筑照明不闪烁），楼前地面 ~11m 处约 480/11^1.7 ≈ 8
     for (const s of this.spots) {
-      s.light.intensity = 700 * night;
+      s.light.intensity = 150 * night;
     }
     // 环境窗光：呼吸（不同楼不同相位），20m 街面处约 300/20^1.6 ≈ 2.3
     for (const g of this.glows) {
       const breathe = 0.85 + 0.15 * Math.sin(t * 0.7 + g.phase);
-      g.light.intensity = 420 * night * breathe;
+      g.light.intensity = 210 * night * breathe;
     }
   }
 
@@ -115,12 +116,12 @@ export class NightLightPool {
       const p = this.glowPoints[c.i];
       const dist = Math.sqrt(c.d);
       if (dist < 1) { s.light.position.set(p.x, 11, p.z); continue; }
-      const k = Math.min(14, dist * 0.55) / dist;
+      const k = 1 - Math.min(SPOT_LEAD, dist * 0.8) / dist;
       const gx = p.x + (px - p.x) * k, gz = p.z + (pz - p.z) * k;
-      s.light.position.set(gx, 11, gz);
+      s.light.position.set(gx, 13, gz);
       // 目标再往玩家方向偏 8m：锥体覆盖楼前街道而不是楼基
       const ux = (px - gx) / Math.max(dist, 1), uz = (pz - gz) / Math.max(dist, 1);
-      s.light.target.position.set(gx + ux * 8, 0, gz + uz * 8);
+      s.light.target.position.set(px, 0, pz);
       s.light.target.updateMatrixWorld();
     }
 
