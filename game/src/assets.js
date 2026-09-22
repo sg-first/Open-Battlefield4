@@ -10,6 +10,8 @@ import { yieldFrame } from './util.js';
 // preset: building | prop | vehicle | weapon | character | ground | backdrop
 // pivot : base(默认) | origin | center
 // mode  : inst(默认，合并实例化) | solo(独立网格，可独立视锥剔除)
+// mat   : 材质微调（嵌套一层，不填就用 preset 的默认值）
+//         { roughness, metalness, env, coat, coatRough, normalScale, albedo }
 const A = (f, o = {}) => ({ f, ...o });
 
 export const GROUPS = {
@@ -206,7 +208,14 @@ export const GROUPS = {
       A('levels_sp_sp_shanghai_objects_policecarshanghai_01_policecarshanghai_01_mesh', { preset: 'vehicle', maxSize: 1024, normal: true, collide: true, mode: 'solo' }),
       A('levels_sp_sp_shanghai_objects_sp_shanghai_van01_sp_shanghai_van01_broken_mesh', { preset: 'vehicle', maxSize: 1024, normal: true, collide: true, mode: 'solo' }),
       A('gameplay_vehicles_ch_mbt_type99_spec_ch_mbt_type99_sp_shanghaichase_mesh', { preset: 'vehicle', maxSize: 1024, normal: true, collide: true, mode: 'solo' }),
-      A('gameplay_vehicles_ch_lthe_z-9_ch_lthe_z-9_wreck_mesh', { preset: 'vehicle', maxSize: 1024, normal: true, collide: true, mode: 'solo' }),
+      // 这架残骸的 _d 贴图偏暗偏平（实测平均亮度 41、方差 651；普通轿车是 79 / 5443），
+      // 沿用车辆预设（metalness .45、roughness .38、env 1.0）时漫反射被金属项吃掉不少，
+      // 整机偏"裸金属"。法线贴图丢 Z 的问题由加载器统一修复（rebuildNormalZ），
+      // 这里只做轻度收敛：哑光、降低金属度与环境反射权重，并略微提亮反照率。
+      A('gameplay_vehicles_ch_lthe_z-9_ch_lthe_z-9_wreck_mesh', {
+        preset: 'vehicle', maxSize: 1024, normal: true, collide: true, mode: 'solo',
+        mat: { metalness: 0.20, roughness: 0.60, env: 0.60, coat: 0.08, coatRough: 0.70, normalScale: 0.8, albedo: 1.2 },
+      }),
       A('objects_vehicles_carcivilian_01_carcivilian_01_wreck_cluster_mesh', { preset: 'vehicle', maxSize: 512, normal: true, collide: true, mode: 'solo' }),
       A('objects_props_siegeskyline_shanghaitower_01_mesh', { preset: 'backdrop', maxSize: 512, pivot: 'base', mode: 'solo', night: 1.5, noFog: true }),
       A('objects_props_siegeskyline_shanghaitower_02_mesh', { preset: 'backdrop', maxSize: 512, pivot: 'base', mode: 'solo', night: 1.5, noFog: true }),
@@ -241,6 +250,8 @@ export async function loadAll(tex, onProgress) {
         // 透传玻璃开关：贴图名命中 "window/glass" 时是否真的做成半透明。
         // 整栋楼的立面贴图常带 window 字样，必须能按资产显式关掉。
         glass: it.glass,
+        // 材质微调：整组透传，由 makeMaterial 里统一取值
+        mat: it.mat || null,
       };
       let asset = await loadAsset(tex, it.f, opt);
       if (!asset) { done++; onProgress && onProgress({ phase: grp.label, done, total }); return; }

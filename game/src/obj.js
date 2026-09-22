@@ -241,6 +241,60 @@ export function analyzeImage(img) {
   }
 }
 
+/* ---------------------------------------------- 双通道法线修复
+   导出里有一批 *_n.png 是「两通道法线」（BC5/DXT5nm 解压后只留下 X/Y，
+   Z 被填成常数 128）。按 three.js 的 2×c−1 解码会得到 z≈0，法线全部躺在
+   切平面内：背光面纯黑、迎光面爆白，完全不是贴图本身的颜色。
+   判据：合法切线空间法线的 B 通道整体偏高（实测角色贴图 B avg≈245~253），
+   丢 Z 的则恒为 128。检测到后按 z = √(1 − x² − y²) 重建。 */
+const NB = { c: null, g: null };
+function normalZMissing(img) {
+  try {
+    if (!NB.c) {
+      NB.c = document.createElement('canvas');
+      NB.c.width = NB.c.height = 32;
+      NB.g = NB.c.getContext('2d', { willReadFrequently: true });
+    }
+    const g = NB.g;
+    g.clearRect(0, 0, 32, 32);
+    g.drawImage(img, 0, 0, 32, 32);
+    const d = g.getImageData(0, 0, 32, 32).data;
+    let sum = 0, hi = 0;
+    for (let i = 0; i < 1024; i++) {
+      const b = d[i * 4 + 2];
+      sum += b;
+      if (b > 170) hi++;
+    }
+    const mean = sum / 1024;
+    return hi < 102 && mean > 100 && mean < 175;   // B 既不高也不低 ⇒ 常数
+  } catch (e) { return false; }
+}
+
+/** 由 X/Y 重建 Z，还原成标准切线空间法线贴图；返回 canvas（无法修复时返回 null） */
+function rebuildNormalZ(img) {
+  try {
+    const w = img.width || 0, h = img.height || 0;
+    if (!w || !h) return null;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.drawImage(img, 0, 0);
+    const id = g.getImageData(0, 0, w, h);
+    const d = id.data;
+    for (let i = 0, n = w * h; i < n; i++) {
+      const o = i * 4;
+      const x = d[o] / 255 * 2 - 1;
+      const y = d[o + 1] / 255 * 2 - 1;
+      const z = Math.sqrt(Math.max(0, 1 - x * x - y * y));
+      d[o] = (x * 0.5 + 0.5) * 255;
+      d[o + 1] = (y * 0.5 + 0.5) * 255;
+      d[o + 2] = (z * 0.5 + 0.5) * 255;
+    }
+    g.putImageData(id, 0, 0);
+    return cv;
+  } catch (e) { return null; }
+}
+
 /* ---------------------------------------------- 贴图缓存 */
 export async function decodeImage(url, maxSize) {
   let blob;
@@ -308,8 +362,13 @@ export class TexCache {
     const pend = this.pending.get(key);
     if (pend) return pend;
     const p = (async () => {
-      const img = await decodeImage(ASSET_BASE + 'tex/' + file, maxSize);
+      let img = await decodeImage(ASSET_BASE + 'tex/' + file, maxSize);
       if (!img) return null;
+      // 法线贴图（非 sRGB）：丢 Z 的两通道图会让表面非黑即白，先修再上传
+      if (!srgb && normalZMissing(img)) {
+        const fixed = rebuildNormalZ(img);
+        if (fixed) img = fixed;
+      }
       const t = new THREE.Texture(img);
       t.name = file;
       t.flipY = false;
@@ -410,22 +469,24 @@ export async function makeMaterial(tex, ref, opt = {}) {
   const usePhysical = reflectiveFacade || opt.preset === 'building'
     || opt.preset === 'vehicle' || preset.coat !== undefined;
   const Material = usePhysical ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
+  // 材质参数可由资产清单的 mat 逐项覆盖（个别资产的贴图与预设不匹配时用它兜底）
+  const M = opt.mat || {};
   const params = {
     map,
     normalMap,
-    roughness: reflectiveFacade ? Math.min(preset.roughness, 0.34) : preset.roughness,
-    metalness: reflectiveFacade ? Math.max(preset.metalness, 0.16) : preset.metalness,
-    envMapIntensity: reflectiveFacade ? Math.max(preset.env, 1.25) : preset.env,
+    roughness: M.roughness ?? (reflectiveFacade ? Math.min(preset.roughness, 0.34) : preset.roughness),
+    metalness: M.metalness ?? (reflectiveFacade ? Math.max(preset.metalness, 0.16) : preset.metalness),
+    envMapIntensity: M.env ?? (reflectiveFacade ? Math.max(preset.env, 1.25) : preset.env),
     side: opt.side ?? THREE.FrontSide,
     fog: opt.fog !== false,
   };
   // clearcoat 只有 Physical 材质支持，写给 Standard 会被忽略并刷警告
   if (usePhysical) {
-    params.clearcoat = preset.coat !== undefined ? preset.coat : (reflectiveFacade ? 0.76 : 0.18);
-    params.clearcoatRoughness = preset.coatRough !== undefined ? preset.coatRough : (reflectiveFacade ? 0.14 : 0.48);
+    params.clearcoat = M.coat ?? (preset.coat !== undefined ? preset.coat : (reflectiveFacade ? 0.76 : 0.18));
+    params.clearcoatRoughness = M.coatRough ?? (preset.coatRough !== undefined ? preset.coatRough : (reflectiveFacade ? 0.14 : 0.48));
   }
   const mat = new Material(params);
-  if (normalMap) mat.normalScale.set(opt.normalScale ?? 1, opt.normalScale ?? 1);
+  if (normalMap) mat.normalScale.set(M.normalScale ?? 1, M.normalScale ?? 1);
 
   if (transparentGlass && opt.glass !== false) {
     mat.transparent = true;
@@ -442,6 +503,7 @@ export async function makeMaterial(tex, ref, opt = {}) {
     mat.emissiveIntensity = opt.emissiveIntensity ?? 1;
   }
   if (!map) mat.color = new THREE.Color(opt.fallbackColor ?? 0x8a8f96);
+  else if (M.albedo) mat.color.setScalar(M.albedo);   // 压暗/提亮贴图（>1 会提亮反照率）
   return mat;
 }
 
