@@ -311,20 +311,20 @@ export function buildWorld(o) {
     }
   }
 
-  /* ---------------- 夜景灯光 / 近景层次 ---------------- */
-  const cityLights = [];
+  /* ---------------- 夜景布景（路灯已不发光）----------------
+     夜晚街道全部由建筑窗光（NightLightPool）照亮。
+     灯杆/灯头保留作街景道具：熄灭状态，深色玻璃罩。 */
   const lampMat = new THREE.MeshBasicMaterial({ color: 0x1e242a, toneMapped: false });
   const lampGeo = new THREE.SphereGeometry(0.095, 8, 6);
   const lampPoles = [];
-  const addLamp = (x, z, h = 5.4, color = 0xffd6a0) => {
+  // 建筑发光点（塔楼/裙楼中心）：夜光池从中挑最近的几盏做「窗光洒向街道」
+  const glowPoints = [];
+  const addLamp = (x, z, h = 5.4) => {
     const bulb = new THREE.Mesh(lampGeo, lampMat);
     bulb.position.set(x, h, z);
     bulb.frustumCulled = false;
-    const light = new THREE.PointLight(color, 0, 18, 2.1);
-    light.position.copy(bulb.position);
-    scene.add(bulb, light);
+    scene.add(bulb);
     lampPoles.push([x, z, h]);
-    cityLights.push({ light, bulb, base: 2.4 + rng() * 1.4, color: new THREE.Color(color) });
   };
   // 在中心街区的交叉口和人行道布置暖色钠灯，与玻璃反射/后期高光共同形成夜景深度。
   for (const x of roadCenters) {
@@ -354,8 +354,8 @@ export function buildWorld(o) {
     poles.castShadow = true;
     scene.add(poles);
   }
-  S.cityLights = cityLights;
-  S.lampMat = lampMat;
+  S.lampPoles = lampPoles;
+  S.glowPoints = glowPoints;
 
   /* ---------------- 建筑 ---------------- */
   const KITS = {
@@ -391,6 +391,7 @@ export function buildWorld(o) {
 
   /** 一栋由模块堆叠成的楼 */
   function buildTower(x, z, far, styleIdx) {
+    glowPoints.push({ x, z });
     const r = rng();
     let floorAsset, floorH = 20.484, head = null, head2 = null;
     if (r < 0.18) { floorAsset = 'objects_architecture_hk_skyscraper_03_hk_skyscraper_03_mesh'; floorH = 40.969; head = 'objects_architecture_hk_skyscraper_03_hk_skyscraper_bottom_03_mesh'; }
@@ -507,6 +508,7 @@ export function buildWorld(o) {
         const ox = rng.range(-1, 1) * 26, oz = rng.range(-1, 1) * 26;
         if (Math.hypot(ox, oz) < 18) continue;
         const px = cx + ox, pz = cz + oz;
+        glowPoints.push({ x: px, z: pz });
         const floors = clamp(rng.int(1, nearWater ? 3 : 4), 1, 5);
         const t = tint(0.78, 1.04);
         const fa = KITS.floors[rng.int(0, 4)];

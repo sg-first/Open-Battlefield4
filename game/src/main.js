@@ -13,6 +13,7 @@ import { WeaponSystem, WEAPON_DEFS } from './weapons.js';
 import { CharacterFactory } from './characters.js';
 import { EnemyManager } from './enemies.js';
 import { buildWorld, Civilians, skyStateAt, sunDirAt, CITY } from './world.js';
+import { NightLightPool } from './nightlights.js';
 import { PostFX } from './post.js';
 import { Inspector } from './inspect.js';
 import { clamp, smoothstep, yieldFrame } from './util.js';
@@ -58,6 +59,7 @@ const state = {
 const OBJECTIVE_MAIN = '目标：清理街区的敌军';
 
 let audio, hud, player, weapons, enemies, civilians, fx, boxes, worldInfo, post, glowMats = [], bgMats = [];
+let nightPool = null;
 let inspector = null, lastInspect = null;
 let builder = null;
 
@@ -85,6 +87,7 @@ async function boot() {
   post = new PostFX(renderer);
   audio = new GameAudio();
   fx = new FX(scene, camera, boxes);
+  nightPool = new NightLightPool(scene, worldInfo);
   // 燃烧点：楼顶/残骸上冒出的浓烟柱与火光
   if (worldInfo.fires) for (const f of worldInfo.fires) fx.addFire(f.x, f.y, f.z, f.s);
   hud = new HUD({ camera, boxes, extent: worldInfo.extent * 1.05 });
@@ -524,12 +527,8 @@ function updateSky(dt) {
       envIntensity: scene.environmentIntensity,
     });
   }
-  if (worldInfo.cityLights) {
-    for (const it of worldInfo.cityLights) {
-      it.light.intensity = night * it.base;
-      it.bulb.material.color.copy(it.color).multiplyScalar(0.08 + night * 1.45);
-    }
-  }
+  // 夜光池：建筑窗光（照亮街道；路灯已移除，不参与夜间照明）
+  if (nightPool) nightPool.update(player.pos.x, player.pos.z, night, dt);
 
   // 远景建筑融入雾色
   const haze = new THREE.Color(st.bot).lerp(new THREE.Color(st.mid), 0.35);

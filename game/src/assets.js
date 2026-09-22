@@ -396,7 +396,9 @@ export class WorldBuilder {
       im.instanceMatrix.needsUpdate = true;
       if (anyTint && im.instanceColor) im.instanceColor.needsUpdate = true;
       im.userData.batch = asset.name;
-      im.castShadow = !!asset.cfg?.shadow;
+      // 道具批（垃圾桶/护栏/箱柜等）参与投影：夜光池的投影路灯需要街边
+      // 道具做遮挡体，否则灯下没有可投射阴影的物体，影子无从谈起。
+      im.castShadow = !!(asset.cfg?.shadow) || asset.cfg?.preset === 'prop';
       im.receiveShadow = true;
       this.scene.add(im);
       this.objects.push(im);
