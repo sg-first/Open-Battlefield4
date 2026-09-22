@@ -91,7 +91,7 @@ async function boot() {
   nightPool = new NightLightPool(scene, worldInfo,
     [...(sm || []), ...(worldInfo.groundExtra || [])], lm || []);
   // 烘焙街道光照贴图：全路网灯位光斑 + 静态遮挡影子，一次烘死
-  setProgress(0.92, '烘焙街道光照…');
+  setProgress(0.94, '烘焙街道光照…');
   await yieldFrame();
   nightPool.bake(boxes);
   // 燃烧点：楼顶/残骸上冒出的浓烟柱与火光
@@ -130,17 +130,49 @@ async function boot() {
 
   inspector = new Inspector({ camera, targets: builder.objects, maxDist: 700 });
 
+  setProgress(0.96, '编译着色器…');
+  await yieldFrame();
+
+  // 预热特效着色器：曳光/枪口火焰/火花/烟/弹孔/弹壳/血雾在第一枪之前
+  // 从未渲染过（一直 visible=false），首次出现会现场编译。这里在载入阶段让它们各露一次面并编译，消除第一枪的卡顿。
+  // （枪口/爆炸点光源已在 fx.js 里改为常驻 visible=true，灯光数量恒定，不会因开灯触发全场材质重编译）
+  {
+    // 收集一批"特效代表对象"，用于触发对应材质的编译
+    const warmFx = [
+      fx.tracers[0] && fx.tracers[0].mesh,
+      fx.flashes[0] && fx.flashes[0].mesh,
+      fx.sparkPools[0] && fx.sparkPools[0].pts,
+      fx.smokes[0] && fx.smokes[0].mesh,
+      fx.decals[0] && fx.decals[0].mesh,
+      fx.casings[0] && fx.casings[0].mesh,
+      fx.bloods[0] && fx.bloods[0].mesh,
+      fx.fireSmoke, fx.fireFlames,
+    ].filter(Boolean);
+    // 把这些对象设为可见（否则会被cull，不会参与编译）
+    for (const m of warmFx) m.visible = true;
+    // InstancedMesh要count>0，否则被cull
+    if (fx.fireSmoke) fx.fireSmoke.count = 1;
+    if (fx.fireFlames) fx.fireFlames.count = 1;
+    renderer.compile(scene, camera);
+    // 设回去
+    for (const m of warmFx) m.visible = false;
+    if (fx.fireSmoke) fx.fireSmoke.count = 0;
+    if (fx.fireFlames) fx.fireFlames.count = 0;
+  }
+
   hud.setObjective(OBJECTIVE_MAIN);
   hud.setScore(0);
+
+  setProgress(0.98, '生成敌军…');
+  await yieldFrame();
+  enemies.spawnWave();
+  audio.resume();
+  audio.ambientStart();
 
   setProgress(1, '就绪');
   await yieldFrame();
   loadEl.classList.add('done');
   setTimeout(() => { loadEl.style.display = 'none'; }, 700);
-
-  enemies.spawnWave();
-  audio.resume();
-  audio.ambientStart();
 
   window.__THREE = THREE;
   window.__game = {
@@ -204,9 +236,14 @@ onkeyup = (e) => { keys[e.code] = false; };
 renderer.domElement.addEventListener('mousedown', (e) => {
   audio && audio.resume();
   if (!started) return;
+  // 用来锁定鼠标的这一下不触发开火：否则“点进游戏”会立刻打出第一枪，
+  // 第一枪点亮枪口灯会触发全场材质的着色器重编译，表现为瞬间卡死几秒。
+  if (document.pointerLockElement !== renderer.domElement) {
+    renderer.domElement.requestPointerLock();
+    return;
+  }
   if (e.button === 0) mouseDown = true;
   if (e.button === 2) rmbDown = true;
-  if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
 });
 onmouseup = (e) => {
   if (e.button === 0) mouseDown = false;

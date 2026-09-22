@@ -57,10 +57,12 @@ export class FX {
       this.flashes.push({ mesh: m, life: 0 });
     }
     // 枪口照明（复用少量点光源）
+    // 注意：这些灯必须常驻场景（visible 恒为 true，闲置时 intensity=0）。
+    // three.js 的着色器按“灯光数量”缓存，若用 visible 开关灯，第一枪会把
+    // 全场几百个材质当场重编译一遍（卡死数秒）；常驻则只有唯一一种灯光状态。
     this.flashLights = [];
     for (let i = 0; i < 3; i++) {
       const l = new THREE.PointLight(0xffbb66, 0, 12, 2);
-      l.visible = false;
       this.group.add(l);
       this.flashLights.push({ light: l, life: 0 });
     }
@@ -139,7 +141,6 @@ export class FX {
     this.booms = [];
     for (let i = 0; i < 5; i++) {
       const light = new THREE.PointLight(0xffa040, 0, 26, 2);
-      light.visible = false;
       this.group.add(light);
       const flash = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
         map: this.texFlash, transparent: true, blending: THREE.AdditiveBlending,
@@ -423,7 +424,6 @@ export class FX {
     const fl = this._flashLight();
     fl.light.position.copy(pos).addScaledVector(dir, 0.15);
     fl.light.intensity = 24 * strong;
-    fl.light.visible = true;
     fl.life = 0.06;
   }
 
@@ -433,7 +433,6 @@ export class FX {
     fl.light.position.copy(pos);
     fl.light.intensity = 26 * scale;
     fl.light.distance = 14 * scale;
-    fl.light.visible = true;
     fl.life = 0.055;
   }
 
@@ -559,7 +558,6 @@ export class FX {
     b.light.position.copy(point);
     b.light.intensity = 300;
     b.light.distance = radius * 9;
-    b.light.visible = true;
     b.flash.position.copy(point);
     b.flash.quaternion.copy(this.camera.quaternion);
     b.flash.rotateZ(Math.random() * 6.28);
@@ -632,17 +630,21 @@ export class FX {
       if (t.life <= 0) t.mesh.visible = false;
     }
 
+    // 更新枪口火焰sprite
     for (const f of this.flashes) {
       if (f.life <= 0) { if (f.mesh.visible) f.mesh.visible = false; continue; }
       f.life -= dt;
       f.mesh.material.opacity = Math.max(0, f.life / 0.06) * (f.base || 1);
       if (f.life <= 0) f.mesh.visible = false;
     }
+    // 更新枪口火焰光源
     for (const f of this.flashLights) {
-      if (f.life <= 0) { if (f.light.visible) { f.light.visible = false; f.light.intensity = 0; } continue; }
-      f.life -= dt;
-      f.light.intensity *= Math.max(0, 1 - dt * 26);
-      if (f.life <= 0) { f.light.visible = false; f.light.intensity = 0; }
+      // 灯常驻可见，只用强度表现明灭（改 visible 会触发全场着色器重编译）
+      if (f.life > 0) {
+        f.life -= dt;
+        f.light.intensity *= Math.max(0, 1 - dt * 26);
+        if (f.life <= 0) f.light.intensity = 0;
+      }
     }
 
     for (const s of this.sparkPools) {
@@ -727,14 +729,14 @@ export class FX {
     }
 
     for (const b of this.booms) {
-      if (b.life <= 0) { if (b.flash.visible) { b.flash.visible = false; b.light.visible = false; b.light.intensity = 0; } continue; }
+      if (b.life <= 0) { if (b.flash.visible) { b.flash.visible = false; b.light.intensity = 0; } continue; }
       b.life -= dt;
       const k = 1 - b.life / b.max;
       b.light.intensity = 300 * Math.max(0, 1 - k * 2.2);
       const s = b.baseS * (1 + k * 2.0);
       b.flash.scale.set(s, s, s);
       b.flash.material.opacity = Math.max(0, 1 - k * 2.6);
-      if (b.life <= 0) { b.flash.visible = false; b.light.visible = false; b.light.intensity = 0; }
+      if (b.life <= 0) { b.flash.visible = false; b.light.intensity = 0; }
     }
 
     this._updatePaper(dt);
