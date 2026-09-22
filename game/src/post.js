@@ -418,7 +418,7 @@ export class PostFX {
   /** night ∈ [0,1]：夜里光晕/颗粒/暗角更强，阴影更冷 */
   setNight(night) {
     const u = this.compositeMat.uniforms;
-    u.uBloom.value = BASE.bloom + night * 0.30;
+    u.uBloom.value = BASE.bloom + night * 0.22;
     u.uGlare.value = BASE.glare * (1.0 - night);
     u.uGhost.value = BASE.ghost * (1.0 - night);
     u.uCA.value = BASE.ca * (1.0 + night * 0.6);

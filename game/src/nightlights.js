@@ -18,8 +18,9 @@
       所有实例自动对齐同一张贴图。
 
    3) 真实投影灯（3 盏 SpotLight）：吸附到离玩家最近的 3 个灯位，
-      给**动态物体**（角色）补接触阴影 —— 静态阴影已经在贴图里了，
-      所以强度压得比较低，只做点缀。
+      从灯头**斜向路面中心线**打 —— 静态影子已烘死，但这盏真光让
+      路上的道具/车辆/角色拖出背向灯杆的斜长影子（垂直向下打只有脚底一滩）。
+      强度压得比较低，只做可见性点缀。
 
    4) 环境窗光（6 盏 PointLight，无阴影）：挂在最近塔楼的朝街窗墙，
       暖色洗墙，让楼体不至于纯黑。
@@ -27,15 +28,15 @@
    注意单位：three r160 默认物理光照，intensity 是坎德拉。
    ============================================================ */
 import * as THREE from 'three';
-import { LAMP } from './world.js';
+import { CITY, LAMP } from './world.js';
 
 /* ---- 烘焙参数 ---- */
-const LMAP_SIZE = 1536;        // 光贴图边长（像素），0.495 m/px
+const LMAP_SIZE = 1792;        // 光贴图边长（像素），0.42 m/px：细物体的斜影才留得住
 const LMAP_WORLD = 760;        // 贴图覆盖的世界尺度（米），路网 ±348 + 光斑外溢
 const BAKE_RADIUS = 22.0;      // 单盏灯的烘焙半径
 const BAKE_FADE = 15.0;        // 从这里向外平滑淡出（避免圆盘出现硬边）
-const POOL_INTENSITY = 2.35;   // 光斑强度（峰值辐照度 ≈ 1.5）
-const POOL_BASE = 0.12;        // 全图底光：保证最远的街也不是死黑
+const POOL_INTENSITY = 1.55;   // 光斑强度（峰值辐照度 ≈ 1.3）
+const POOL_BASE = 0.075;       // 全图底光：保证最远的街也不是死黑
 const OCCLUDERS_MAX = 14;      // 每盏灯最多考虑的遮挡体数量
 const OCCLUDE_MIN_ATT = 0.012; // 衰减低于此值就不再测遮挡（省时间）
 
@@ -43,10 +44,11 @@ const OCCLUDE_MIN_ATT = 0.012; // 衰减低于此值就不再测遮挡（省时�
 const SHADOW_COUNT = 3;        // 投影路灯数
 const GLOW_COUNT = 6;          // 环境窗光数
 const GLOW_RANGE = 64.0;
-const GLOW_INTENSITY = 150;
-const SPOT_DIST = 34.0;
-const SPOT_ANGLE = 1.02;       // 灯锥半角：地面半径 ≈ H·tan(1.02) ≈ 10m
-const SPOT_INTENSITY = 32;     // 静态阴影已烘死，真实灯只给角色补接触阴影
+const GLOW_INTENSITY = 105;
+const SPOT_DIST = 30.0;
+const SPOT_ANGLE = 0.8;        // 灯锥半角：斜向路面打，越远影子拖得越长
+const SPOT_TILT = 0.7;         // 目标点朝路中心线偏移灯位横向距离的比例
+const SPOT_INTENSITY = 26;     // 斜打摊得更开，比垂直向下略抬一点
 const REASSIGN_INTERVAL = 0.35;
 
 const LAMP_WARM = 0xffc98a;
@@ -197,14 +199,14 @@ export class NightLightPool {
     for (const m of groundMats) if (m) applyStreetLightmap(m, this.uniforms, false);
     for (const m of propMats) if (m) applyStreetLightmap(m, this.uniforms, true);
 
-    /* ---- 投影路灯：SpotLight 垂直向下，挂在灯头上 ---- */
+    /* ---- 投影路灯：挂在灯头上，斜向路面打 —— 物体拖出斜长影子 ---- */
     this.spots = [];
     for (let i = 0; i < SHADOW_COUNT; i++) {
       const s = new THREE.SpotLight(LAMP_WARM, 0, SPOT_DIST, SPOT_ANGLE, 0.72, 1.7);
       s.position.set(0, LAMP.H, 0);
       s.target.position.set(0, 0, 0);
       s.castShadow = true;
-      s.shadow.mapSize.set(1024, 1024);
+      s.shadow.mapSize.set(1536, 1536);
       s.shadow.camera.near = 0.5;
       s.shadow.camera.far = SPOT_DIST;
       s.shadow.bias = -0.0004;
@@ -382,6 +384,21 @@ export class NightLightPool {
     return best;
   }
 
+  /**
+   * 灯位的斜打方向：灯永远在人行道内侧（离路中心线 LAMP.SIDE），
+   * 判断它属于纵向还是横向街道，把目标点往路中心线偏 ——
+   * 灯锥斜下来，路面上的道具/车辆才会拖出背向灯杆的斜长影子。
+   */
+  _aimOffset(l) {
+    const B = CITY.BLOCK, S = LAMP.SIDE;
+    const rx = (Math.floor(l.x / B) + 0.5) * B;   // 最近的纵向街道中心线
+    const rz = (Math.floor(l.z / B) + 0.5) * B;   // 最近的横向街道中心线
+    const dv = Math.abs(Math.abs(l.x - rx) - S);  // 哪条街的"侧灯位"更吻合
+    const dh = Math.abs(Math.abs(l.z - rz) - S);
+    if (dv <= dh) return { x: (rx - l.x) * SPOT_TILT, z: 0 };
+    return { x: 0, z: (rz - l.z) * SPOT_TILT };
+  }
+
   /** 投影灯吸附到离玩家最近的几个灯位；环境窗光吸附到最近的塔楼窗墙 */
   _reassign(px, pz) {
     const lamps = this.lamps;
@@ -399,8 +416,9 @@ export class NightLightPool {
       if (best < 0) break;
       used.add(best);
       const l = lamps[best];
+      const off = this._aimOffset(l);
       s.position.set(l.x, LAMP.H + 0.35, l.z);
-      s.target.position.set(l.x, 0, l.z);
+      s.target.position.set(l.x + off.x, 0, l.z + off.z);   // 斜向路面：影子被拉长
       s.target.updateMatrixWorld();
     }
 

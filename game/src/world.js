@@ -33,8 +33,8 @@ export const LAMP = {
 
 /* ---------------------------------------------------------- 天空 */
 const SKY_KEYS = [
-  { e: -0.45, top: '#080f24', mid: '#16203c', bot: '#242f4a', sun: '#7f9ac6', dir: 0.22, amb: 0.30, hemi: 0.34, fog: 0x131b30, exp: 1.35 },
-  { e: -0.12, top: '#122043', mid: '#33365f', bot: '#6b4f5e', sun: '#c08ea6', dir: 0.50, amb: 0.30, hemi: 0.40, fog: 0x2d3350, exp: 1.26 },
+  { e: -0.45, top: '#080f24', mid: '#16203c', bot: '#242f4a', sun: '#7f9ac6', dir: 0.22, amb: 0.30, hemi: 0.34, fog: 0x131b30, exp: 1.18 },
+  { e: -0.12, top: '#122043', mid: '#33365f', bot: '#6b4f5e', sun: '#c08ea6', dir: 0.50, amb: 0.30, hemi: 0.40, fog: 0x2d3350, exp: 1.14 },
   { e: 0.03, top: '#183064', mid: '#8a5c78', bot: '#e2926a', sun: '#ffb478', dir: 1.35, amb: 0.34, hemi: 0.52, fog: 0x9a7466, exp: 1.06 },
   { e: 0.22, top: '#255fa8', mid: '#9dc0e6', bot: '#e8dcc4', sun: '#fff0cf', dir: 2.35, amb: 0.40, hemi: 0.68, fog: 0xc4d4e2, exp: 0.98 },
   { e: 1.0, top: '#1f5ab8', mid: '#8fc0ee', bot: '#dbe7f4', sun: '#fffaf0', dir: 3.0, amb: 0.44, hemi: 0.74, fog: 0xd2e0ee, exp: 0.96 },
