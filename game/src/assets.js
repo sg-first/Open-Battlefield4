@@ -2,7 +2,7 @@
    资产清单 / 批量加载 / 世界实例化批处理
    ============================================================ */
 import * as THREE from 'three';
-import { loadAsset, TexCache, clipGeometryY } from './obj.js';
+import { loadAsset, TexCache, clipGeometryY, deriveWindowMask } from './obj.js';
 import { reattachProcShader, windowMaskFor } from './proc.js';
 import { yieldFrame } from './util.js';
 
@@ -268,12 +268,22 @@ export async function loadAll(tex, onProgress) {
       asset.glow = it.night || 0;
       if (it.night) {
         for (const p of asset.parts) {
-          p.material.emissive = new THREE.Color(0xffc27a);
-          // 程序化材质用窗光遮罩，夜景是零散点亮的窗格而非整墙均匀发亮
-          if (p.material.map) p.material.emissiveMap = windowMaskFor(p.material) || p.material.map;
-          p.material.emissiveIntensity = 0;
-          p.material.userData.glow = it.night;
-          glowMats.push(p.material);
+          let m = p.material;
+          // 程序化材质按 kind+variant 缓存并共享：直接往上写自发光会污染
+          // 其它共用该材质的建筑，必须克隆一份（并重新挂三平面着色器）
+          if (m.userData && m.userData.proc) {
+            m = m.clone();
+            reattachProcShader(m);
+            p.material = m;
+          }
+          m.emissive = new THREE.Color(0xffc27a);
+          // 自发光只走「窗户掩膜」：
+          //   程序化材质 → 自带窗格遮罩（与重投影 UV 对齐）
+          //   真实贴图   → 由立面贴图的暗区推导（玻璃是暗区、墙体是亮区）
+          m.emissiveMap = windowMaskFor(m) || deriveWindowMask(m.map) || m.map;
+          m.emissiveIntensity = 0;
+          m.userData.glow = it.night;
+          glowMats.push(m);
         }
       }
       if (it.preset === 'backdrop') {

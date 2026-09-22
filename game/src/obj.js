@@ -7,6 +7,7 @@
    ============================================================ */
 import * as THREE from 'three';
 import { pickMatKind, PROC, procMaterial, boxProjectUV, paintVertexColor } from './proc.js';
+import { makeCanvas, clamp, smoothstep, valueNoise2D } from './util.js';
 
 /** export/ 根目录（game/src/ 向上两级） */
 export const ASSET_BASE = new URL('../../', import.meta.url).href;
@@ -193,8 +194,12 @@ export function parseMTL(text) {
 }
 
 /* ---------------------------------------------- 占位贴图识别
-   BF4 导出里有一部分贴图是「调试 UV 色块」（纯绿/纯紫/纯红），
-   它们会让整栋楼变成卡通色。这里做一次极低成本的分析并剔除。 */
+   BF4 导出里有一部分贴图是「调试贴图」，它们会让整栋楼变成卡通色。
+   两种形态：
+     1) 少数几块高饱和纯色块（纯绿/纯紫/纯红）→ flatColors
+     2) 满屏高饱和噪声/彩色色斑（洋红-青-蓝）→ vivid
+   真实建筑立面几乎完全无彩（实测均值饱和度 0.03~0.08），
+   而这两种调试贴图是 0.64~1.00，分离度极大。 */
 const AN = { c: null, g: null };
 export function analyzeImage(img) {
   try {
@@ -208,7 +213,7 @@ export function analyzeImage(img) {
     g.drawImage(img, 0, 0, 32, 32);
     const d = g.getImageData(0, 0, 32, 32).data;
     const buckets = new Map();
-    let sat = 0, noise = 0, lumaSum = 0, lumaN = 0;
+    let sat = 0, noise = 0, lumaSum = 0, lumaN = 0, satSum = 0, vividPx = 0;
     const lum = new Float32Array(1024);
     for (let y = 0; y < 32; y++) {
       for (let x = 0; x < 32; x++) {
@@ -218,6 +223,9 @@ export function analyzeImage(img) {
         buckets.set(key, (buckets.get(key) || 0) + 1);
         const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b);
         if (mx > 150 && (mx - mn) > 105) sat++;
+        const s = mx > 0 ? (mx - mn) / mx : 0;
+        satSum += s;
+        if (mx > 60 && s > 0.40) vividPx++;
         const L = (r * 0.299 + gg * 0.587 + b * 0.114);
         lum[i] = L;
         lumaSum += L; lumaN++;
@@ -232,12 +240,18 @@ export function analyzeImage(img) {
     variance /= 1024;
     let major = 0;
     for (const v of buckets.values()) if (v >= 32 * 32 * 0.05) major++;
-    // 仅识别「少数几块高饱和纯色」的调试 UV 色块贴图，
-    // 不能用高频噪声作为判据：真实建筑贴图（窗格阵列）同样高频。
+    // 少数几块高饱和纯色
     const flatColors = major >= 2 && major <= 4 && sat >= 1024 * 0.30;
-    return { placeholder: flatColors, major, sat, noiseMetric, variance, flatColors };
+    // 整图高饱和（噪声/彩色斑块调试贴图）
+    const meanSat = satSum / 1024;
+    const vividFrac = vividPx / 1024;
+    const vivid = meanSat > 0.45 && vividFrac > 0.60;
+    return {
+      placeholder: flatColors, vivid, major, sat, noiseMetric, variance,
+      flatColors, meanSat, vividFrac,
+    };
   } catch (e) {
-    return { placeholder: false, major: 0, sat: 0, noiseMetric: 0, variance: 0 };
+    return { placeholder: false, vivid: false, major: 0, sat: 0, noiseMetric: 0, variance: 0, meanSat: 0, vividFrac: 0 };
   }
 }
 
@@ -382,6 +396,7 @@ export class TexCache {
       if (srgb && maxSize >= 128) {
         const a = analyzeImage(img);
         t.userData.placeholder = a.placeholder;
+        t.userData.analysis = a;          // vivid（高饱和调试图案）等指标留给 loadAsset 判断
         if (a.placeholder) {
           t.userData.placeholderInfo = `${file}`;
           this.placeholderCount = (this.placeholderCount || 0) + 1;
@@ -565,6 +580,17 @@ export async function loadAsset(tex, name, opt = {}) {
       // 引用的是调试占位贴图时同样走程序化材质
       const probe = await tex.get(g.ref.Kd, { srgb: true, maxSize: opt.maxSize || 512 });
       if (!probe || probe.userData.placeholder) usable = false;
+      else {
+        // 满屏高饱和的调试图案（洋红-青噪声等）：真实建筑立面几乎无彩，
+        // 但霓虹灯、交通锥这类道具本来就鲜艳，所以只对建筑/远景生效，
+        // 避免把发光招牌误判成占位块。
+        const an = probe.userData.analysis;
+        // 建筑、远景、地面都不可能是高饱和的；但霓虹灯、交通锥、灯笼等
+        // 道具本来就鲜艳，必须排除，否则会把发光招牌误判成占位块。
+        const architectural = opt.preset === 'building'
+          || opt.preset === 'backdrop' || opt.preset === 'ground';
+        if (an && an.vivid && architectural) usable = false;
+      }
     }
     if (usable) {
       material = await makeMaterial(tex, g.ref, opt);
@@ -612,6 +638,87 @@ export async function loadAsset(tex, name, opt = {}) {
   }
 
   return { name, parts, tris, size, center, min: box.min.clone(), max: box.max.clone(), opt };
+}
+
+/* ---------------------------------------------- 夜间窗户掩膜 */
+/**
+ * 由立面漫反射贴图推导「窗户掩膜」，用作 emissiveMap。
+ *
+ * 为什么不能直接拿漫反射贴图当 emissiveMap：BF4 导出的立面上，
+ * 玻璃窗是**暗区**（深色玻璃／黑色），墙体与楼板是**亮区**。
+ * 直接把 map 当 emissiveMap 会让整面墙发光、窗户反而黑的，
+ * 看上去就是「一整栋全在发光」，非常假。
+ *
+ * 这里按亮度取暗区生成掩膜（smoothstep 反相），再叠一层低频噪声，
+ * 让不同楼段/窗格的亮度有变化，而不是整齐划一。
+ * 结果按源贴图缓存（同一张贴图被多栋楼共用时只算一次）。
+ *
+ * 阈值用**分位数**而不是固定值：各张贴图的整体明暗差异极大
+ * （例如某栋楼的贴图是一张整体偏暗的内饰图，固定阈值会让它整面全亮）。
+ * 取亮度的 p12 / p32 作为暗区上下界，发光面积因此被锁在 30% 左右，
+ * 且能自适应不同曝光的立面。
+ */
+const _maskCache = new WeakMap();
+export function deriveWindowMask(srcTex, size = 256) {
+  if (!srcTex || !srcTex.image) return null;
+  const hit = _maskCache.get(srcTex);
+  if (hit) return hit;
+  try {
+    const c = makeCanvas(size, size);
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(srcTex.image, 0, 0, size, size);
+    const img = g.getImageData(0, 0, size, size);
+    const d = img.data;
+    const n = size * size;
+
+    const lum = new Float32Array(n);
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < n; i++) {
+      const L = (0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2]) / 255;
+      lum[i] = L;
+      hist[Math.min(255, (L * 255) | 0)]++;
+    }
+    const pct = (p) => {
+      let acc = 0;
+      for (let b = 0; b < 256; b++) {
+        acc += hist[b];
+        if (acc >= n * p) return b / 255;
+      }
+      return 1;
+    };
+    const lo = pct(0.12), hi = pct(0.32);
+    // 明暗几乎没有层次（整体均匀的贴图）：没有「窗 vs 墙」可分离，
+    // 只留极淡底光，避免随机斑块发光。
+    const flat = (hi - lo) < 0.05;
+    const nz = valueNoise2D(1337, 8);
+
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const i = y * size + x;
+        let m = flat ? 0 : (1 - smoothstep(lo, hi, lum[i]));
+        if (m > 0.001) {
+          // 低频变化：不同楼段/窗格亮度不一，避免整齐划一
+          const v = 0.55 + 0.75 * nz((x / size) * 8, (y / size) * 8);
+          m *= clamp(v, 0.2, 1.15);
+        }
+        const out = Math.round(clamp(Math.max(m, 0.05), 0, 1) * 255);
+        const p = i * 4;
+        d[p] = d[p + 1] = d[p + 2] = out;
+        d[p + 3] = 255;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(c);
+    t.name = (srcTex.name || 'tex') + '_nightmask';
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = 4;
+    t.needsUpdate = true;
+    _maskCache.set(srcTex, t);
+    return t;
+  } catch (e) {
+    return null;
+  }
 }
 
 /* ---------------------------------------------- 辅助 */
